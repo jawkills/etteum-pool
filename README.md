@@ -47,16 +47,8 @@ The installer will:
 
 ### Start the Server
 
-**Linux/macOS:**
 ```bash
-cd ~/etteum-pool  # or wherever it was installed
-./etteum start
-```
-
-**Windows:**
-```powershell
-cd $HOME\etteum-pool
-.\etteum.ps1 start
+etteum start
 ```
 
 ### Access the Dashboard
@@ -110,7 +102,7 @@ cd dashboard && bun run build && cd ..
 bun src/db/migrate.ts
 
 # Start the server
-./etteum start
+etteum start
 ```
 
 ---
@@ -119,7 +111,6 @@ bun src/db/migrate.ts
 
 ### CLI Commands
 
-**Linux/macOS (`etteum`):**
 ```bash
 etteum start          # Start server in background
 etteum stop           # Stop server
@@ -129,15 +120,6 @@ etteum logs           # View server logs
 etteum build          # Rebuild dashboard and restart
 etteum dev            # Run in development mode (with hot reload)
 etteum migrate        # Run database migrations
-```
-
-**Windows (`etteum.ps1`):**
-```powershell
-.\etteum.ps1 start
-.\etteum.ps1 stop
-.\etteum.ps1 restart
-.\etteum.ps1 status
-.\etteum.ps1 logs
 ```
 
 ### Adding Accounts
@@ -375,7 +357,7 @@ cd ~/etteum-pool
 git pull
 bun install
 cd dashboard && bun install && bun run build && cd ..
-./etteum restart
+etteum restart
 ```
 
 ---
