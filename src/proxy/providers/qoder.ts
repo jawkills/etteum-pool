@@ -949,6 +949,36 @@ export class QoderProvider extends BaseProvider {
             for (const raw of lines) {
               const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
               if (!line) continue;
+
+              // Detect Qoder error responses in SSE body (HTTP 200 but error in JSON)
+              // Format: {"code":"112","statusCodeValue":403,"message":"..."}
+              if (line.startsWith("data:")) {
+                const dataStr = line.slice(5).trim();
+                if (dataStr && dataStr !== "[DONE]") {
+                  try {
+                    const wrapper = JSON.parse(dataStr);
+                    const svc = wrapper.statusCodeValue;
+                    if (svc && svc >= 400) {
+                      const errStatus = wrapper.statusCode || "";
+                      let errMsg = wrapper.message || "";
+                      if (typeof errMsg === "string" && errMsg.startsWith("{")) {
+                        try { const p = JSON.parse(errMsg); errMsg = p.pricingUrl || JSON.stringify(p); } catch {}
+                      }
+                      const fullErr = `Qoder HTTP ${svc} ${errStatus}: ${errMsg.slice(0, 200) || "rate limited or quota exceeded"}`;
+                      console.error(`[Qoder] ${fullErr}`);
+                      // Emit error to client and stop stream
+                      try {
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: { message: fullErr, type: "upstream_error" } })}\n\n`));
+                        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                      } catch {}
+                      streamActive = false;
+                      finishEmitted = true;
+                      break;
+                    }
+                  } catch {}
+                }
+              }
+
               const parsedDelta = parseSseLine(line);
               if (!parsedDelta) continue;
 
