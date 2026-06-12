@@ -74,6 +74,22 @@ async def _run_provider_once(adapter, account: NormalizedAccount) -> dict:
             }
         )
 
+        # Save browser cookie header string for billing API access
+        # (do this before fetch_quota — browser may crash during quota fetch)
+        if session and isinstance(session, dict):
+            page = session.get("page")
+            if page:
+                try:
+                    context = page.context
+                    browser_cookies = await context.cookies()
+                    if browser_cookies:
+                        cookie_header = "; ".join(
+                            f"{c['name']}={c['value']}" for c in browser_cookies
+                        )
+                        tokens["web_cookie"] = cookie_header
+                except Exception:
+                    pass
+
         quota = None
         try:
             quota = await adapter.fetch_quota(account, tokens, session)
@@ -126,21 +142,6 @@ async def _run_provider_once(adapter, account: NormalizedAccount) -> dict:
                     "message": f"Quota fetch skipped: {e}",
                 }
             )
-
-        # Save browser cookie header string for billing API access
-        if session and isinstance(session, dict):
-            page = session.get("page")
-            if page:
-                try:
-                    context = page.context
-                    browser_cookies = await context.cookies()
-                    if browser_cookies:
-                        cookie_header = "; ".join(
-                            f"{c['name']}={c['value']}" for c in browser_cookies
-                        )
-                        tokens["web_cookie"] = cookie_header
-                except Exception:
-                    pass
 
         # Post-login hook (e.g., kiro-pro auto-upgrade)
         upgrade_result = None
