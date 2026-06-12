@@ -26,44 +26,17 @@ CODEBUDDY_BASE_URL = os.getenv("BATCHER_CODEBUDDY_BASE_URL", "https://www.codebu
 CODEBUDDY_PLATFORM = (
     os.getenv("BATCHER_CODEBUDDY_PLATFORM", "IDE").strip().upper() or "IDE"
 )
-CODEBUDDY_FETCH_QUOTA_ENABLED = (
-    os.getenv("BATCHER_CODEBUDDY_FETCH_QUOTA", "false").lower() == "true"
-)
 CODEBUDDY_STATE_ENDPOINT = os.getenv(
     "BATCHER_CODEBUDDY_STATE_ENDPOINT",
     f"{CODEBUDDY_BASE_URL}/v2/plugin/auth/state?platform={CODEBUDDY_PLATFORM}",
-)
-CODEBUDDY_TOKEN_POLL_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_TOKEN_POLL_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/v2/plugin/auth/token",
-)
-CODEBUDDY_LOGIN_ACCOUNT_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_LOGIN_ACCOUNT_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/v2/plugin/login/account",
 )
 CODEBUDDY_CONSOLE_LOGIN_ACCOUNT_ENDPOINT = os.getenv(
     "BATCHER_CODEBUDDY_CONSOLE_LOGIN_ACCOUNT_ENDPOINT",
     f"{CODEBUDDY_BASE_URL}/console/login/account",
 )
-CODEBUDDY_ACCOUNTS_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_ACCOUNTS_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/v2/plugin/accounts",
-)
 CODEBUDDY_CONSOLE_ACCOUNTS_ENDPOINT = os.getenv(
     "BATCHER_CODEBUDDY_CONSOLE_ACCOUNTS_ENDPOINT",
     f"{CODEBUDDY_BASE_URL}/console/accounts",
-)
-CODEBUDDY_CONSOLE_VALIDATE_REFRESH_TOKEN_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_CONSOLE_VALIDATE_REFRESH_TOKEN_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/console/validate/refresh-token",
-)
-CODEBUDDY_CONSOLE_LOGIN_ENTERPRISE_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_CONSOLE_LOGIN_ENTERPRISE_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/console/login/enterprise",
-)
-CODEBUDDY_CONSOLE_AUTH_LOGIN_ENDPOINT = os.getenv(
-    "BATCHER_CODEBUDDY_CONSOLE_AUTH_LOGIN_ENDPOINT",
-    f"{CODEBUDDY_BASE_URL}/console/auth/login",
 )
 CODEBUDDY_USER_RESOURCE_ENDPOINT = os.getenv(
     "BATCHER_CODEBUDDY_USER_RESOURCE_ENDPOINT",
@@ -75,12 +48,6 @@ CODEBUDDY_API_KEYS_ENDPOINT = os.getenv(
 )
 CODEBUDDY_REDIRECT_SCHEME = os.getenv(
     "BATCHER_CODEBUDDY_REDIRECT_SCHEME", "codebuddy://"
-)
-CODEBUDDY_POLL_INTERVAL_SECONDS = float(
-    os.getenv("BATCHER_CODEBUDDY_POLL_INTERVAL_SECONDS", "2")
-)
-CODEBUDDY_POLL_TIMEOUT_SECONDS = float(
-    os.getenv("BATCHER_CODEBUDDY_POLL_TIMEOUT_SECONDS", "180")
 )
 # Keep native CodeBuddy flow by default:
 # after Google login, CodeBuddy should route to region page when needed.
@@ -156,113 +123,6 @@ PASSWORD_SELECTORS = [
     'input[name="Passwd"]',
     'input[autocomplete="current-password"]',
 ]
-
-
-async def _fill_input(target: Any, selectors: list[str], value: str) -> bool:
-    for selector in selectors:
-        try:
-            handle = await target.query_selector(selector)
-            if not handle:
-                continue
-            if not await handle.is_visible():
-                continue
-
-            # Focus and clear current value.
-            try:
-                await handle.click(timeout=1200)
-            except Exception:
-                pass
-            try:
-                await handle.press("Control+a")
-                await handle.press("Backspace")
-            except Exception:
-                pass
-
-            # Try direct value injection + input/change events.
-            try:
-                await target.evaluate(
-                    """({sel, val}) => {
-                        const el = document.querySelector(sel);
-                        if (!el) return;
-                        el.focus();
-                        const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
-                        const setter = proto
-                          ? Object.getOwnPropertyDescriptor(proto, 'value')?.set
-                          : null;
-                        if (setter) {
-                            setter.call(el, val);
-                        } else {
-                            el.value = val;
-                        }
-                        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-                    }""",
-                    {"sel": selector, "val": value},
-                )
-            except Exception:
-                pass
-
-            current = await _read_input_value(target, [selector])
-            if current.strip() == value.strip():
-                return True
-
-            # Fallback: real key typing (slower, but tends to work on guarded inputs).
-            try:
-                await handle.click(timeout=1200)
-                await handle.press("Control+a")
-                await handle.press("Backspace")
-                await target.keyboard.type(value, delay=35)
-            except Exception:
-                continue
-
-            current = await _read_input_value(target, [selector])
-            if current.strip() == value.strip():
-                return True
-
-            # Last resort for guarded inputs.
-            try:
-                await handle.click(timeout=1200)
-                await target.keyboard.insert_text(value)
-            except Exception:
-                continue
-            current = await _read_input_value(target, [selector])
-            if current.strip() == value.strip():
-                return True
-        except Exception:
-            continue
-    return False
-
-
-async def _all_targets(page: Any, preferred: Any | None) -> list[Any]:
-    targets: list[Any] = []
-    seen: set[int] = set()
-
-    def add(obj: Any) -> None:
-        if obj is None:
-            return
-        key = id(obj)
-        if key in seen:
-            return
-        seen.add(key)
-        targets.append(obj)
-
-    add(preferred)
-    add(page)
-    try:
-        for frame in page.frames:
-            add(frame)
-    except Exception:
-        pass
-    return targets
-
-
-async def _fill_input_anywhere(
-    page: Any, preferred: Any | None, selectors: list[str], value: str
-) -> bool:
-    for target in await _all_targets(page, preferred):
-        if await _fill_input(target, selectors, value):
-            return True
-    return False
 
 
 def _codebuddy_auth_debug_enabled() -> bool:
@@ -471,48 +331,6 @@ async def _fill_google_password_step(target: Any, password: str) -> bool:
             _codebuddy_auth_debug(f"password fill error selector={selector} err={exc}")
             continue
     return False
-
-
-async def _fill_google_email_anywhere(
-    page: Any, preferred: Any | None, email: str
-) -> bool:
-    for target in await _all_targets(page, preferred):
-        if await _fill_google_email_step(target, email):
-            return True
-    return False
-
-
-async def _fill_google_password_anywhere(
-    page: Any, preferred: Any | None, password: str
-) -> bool:
-    for target in await _all_targets(page, preferred):
-        if await _fill_google_password_step(target, password):
-            return True
-    return False
-
-
-async def _read_input_value(target: Any, selectors: list[str]) -> str:
-    for selector in selectors:
-        try:
-            handle = await target.query_selector(selector)
-            if not handle:
-                continue
-            value = await handle.input_value()
-            if value is not None:
-                return str(value)
-        except Exception:
-            continue
-    return ""
-
-
-async def _read_input_value_anywhere(
-    page: Any, preferred: Any | None, selectors: list[str]
-) -> str:
-    for target in await _all_targets(page, preferred):
-        value = await _read_input_value(target, selectors)
-        if value:
-            return value
-    return ""
 
 
 async def _wait_for_google_email_transition(target: Any) -> bool:
@@ -1172,45 +990,6 @@ async def _handle_google_consent_continue(page: Any) -> bool:
         return False
 
 
-async def _detect_google_blocking_challenge(page: Any) -> str | None:
-    try:
-        current_url = page.url
-    except Exception:
-        current_url = ""
-    if "accounts.google.com" not in current_url:
-        return None
-
-    try:
-        marker = str(
-            await page.evaluate(
-                """() => {
-                    const text = (document.body?.innerText || '').toLowerCase();
-                    const markers = [
-                        'captcha',
-                        'try again later',
-                        'this browser or app may not be secure',
-                        'this browser may not be secure',
-                        'unusual traffic',
-                        "verify it's you",
-                        'verify it’s you',
-                        "confirm it's you",
-                        'confirm it’s you',
-                    ];
-                    for (const candidate of markers) {
-                        if (text.includes(candidate)) return candidate;
-                    }
-                    if ((window.location.pathname || '').includes('/challenge/')) {
-                        return 'google challenge';
-                    }
-                    return '';
-                }"""
-            )
-        ).strip()
-        return marker or None
-    except Exception:
-        return None
-
-
 async def _handle_codebuddy_region_select(page: Any) -> bool:
     try:
         current_url = page.url
@@ -1530,10 +1309,6 @@ async def _build_cookie_header_from_page(page: Any, base_url: str) -> str:
     return _build_cookie_header_from_dict(cookies)
 
 
-async def _build_codebuddy_billing_cookie_header(page: Any) -> str:
-    return await _build_cookie_header_from_page(page, CODEBUDDY_USER_RESOURCE_ENDPOINT)
-
-
 async def _create_api_key_via_page(
     page: Any,
     user_enterprise_id: str = "personal-edition-user-id",
@@ -1667,8 +1442,6 @@ async def _create_api_key_fast(page: Any) -> str | None:
     )
 
 
-
-
 async def _ensure_region_with_retry(
     page: Any, account_email: str, max_retries: int = 3
 ) -> bool:
@@ -1706,7 +1479,6 @@ async def _ensure_region_with_retry(
 
     _codebuddy_auth_debug(f"region selection failed after {max_retries} attempts")
     return False
-
 
 
 async def _fetch_user_resource_credit_via_page(page: Any) -> dict[str, float] | None:
@@ -1894,156 +1666,6 @@ async def _submit_region_via_page(page: Any) -> bool:
     return True
 
 
-async def _open_profile_and_check_region(page: Any) -> tuple[bool, str]:
-    profile_url = f"{CODEBUDDY_BASE_URL}/profile"
-    try:
-        await page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=6000)
-        except Exception:
-            pass
-        await asyncio.sleep(0.6)
-    except Exception as exc:
-        _codebuddy_auth_debug(f"profile probe goto failed err={exc}")
-        return False, ""
-
-    try:
-        current_url = str(page.url or "")
-    except Exception:
-        current_url = ""
-    parsed = urlparse(current_url) if current_url else None
-    path = parsed.path if parsed else ""
-    is_profile = bool(path.startswith("/profile"))
-    _codebuddy_auth_debug(
-        f"profile probe url={current_url or '-'} is_profile={is_profile}"
-    )
-    return is_profile, current_url
-
-
-async def _ensure_region_profile_access(page: Any, *, max_attempts: int = 2) -> bool:
-    for attempt in range(1, max_attempts + 1):
-        is_profile, _ = await _open_profile_and_check_region(page)
-        if is_profile:
-            return True
-        forced = await _submit_region_via_page(page)
-        _codebuddy_auth_debug(f"region retry attempt={attempt} forced={forced}")
-        await asyncio.sleep(0.8)
-    is_profile, _ = await _open_profile_and_check_region(page)
-    return is_profile
-
-
-async def _submit_region_with_bearer_via_page(page: Any, bearer: str) -> bool:
-    token = str(bearer or "").strip()
-    if not token:
-        return False
-    try:
-        result = await page.evaluate(
-            """async ({ url, token, body }) => {
-                try {
-                    const resp = await fetch(url, {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: {
-                            'Accept': 'application/json, text/plain, */*',
-                            'Content-Type': 'application/json',
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'Authorization': `Bearer ${token}`,
-                        },
-                        body: JSON.stringify(body),
-                    });
-                    const text = await resp.text();
-                    let json = null;
-                    try { json = JSON.parse(text); } catch {}
-                    return { status: resp.status, text, json };
-                } catch (err) {
-                    return { status: 0, text: String(err), json: null };
-                }
-            }""",
-            {
-                "url": CODEBUDDY_CONSOLE_LOGIN_ACCOUNT_ENDPOINT,
-                "token": token,
-                "body": {
-                    "attributes": {
-                        "countryCode": ["65"],
-                        "countryFullName": ["Singapore"],
-                        "countryName": ["SG"],
-                    }
-                },
-            },
-        )
-    except Exception as exc:
-        _codebuddy_auth_debug(f"force region with bearer error={exc}")
-        return False
-
-    status = int(result.get("status") or 0)
-    payload = result.get("json")
-    body = str(result.get("text") or "")
-    code = payload.get("code") if isinstance(payload, dict) else None
-    _codebuddy_auth_debug(f"force region with bearer status={status} code={code}")
-    if status == 200 and isinstance(payload, dict) and payload.get("code") == 0:
-        return True
-    if status and body:
-        _codebuddy_auth_debug(f"force region with bearer body={body[:160]}")
-    return False
-
-
-async def _ensure_region_after_token(
-    page: Any, bearer: str, *, max_attempts: int = 2
-) -> bool:
-    for attempt in range(1, max_attempts + 1):
-        forced = await _submit_region_with_bearer_via_page(page, bearer)
-        if not forced:
-            forced = await _submit_region_via_page(page)
-        _codebuddy_auth_debug(f"region post-token attempt={attempt} forced={forced}")
-        await asyncio.sleep(0.8)
-        is_profile, _ = await _open_profile_and_check_region(page)
-        if is_profile:
-            return True
-    is_profile, _ = await _open_profile_and_check_region(page)
-    return is_profile
-
-
-async def _validate_refresh_token_via_page(page: Any) -> bool:
-    status, payload, body = await _codebuddy_request_via_page(
-        page,
-        "GET",
-        CODEBUDDY_CONSOLE_VALIDATE_REFRESH_TOKEN_ENDPOINT,
-    )
-    code = payload.get("code") if isinstance(payload, dict) else None
-    _codebuddy_auth_debug(
-        f"validate refresh-token via page status={status} code={code}"
-    )
-    if status == 200 and isinstance(payload, dict) and payload.get("code") == 0:
-        return True
-    if status and body:
-        _codebuddy_auth_debug(f"validate refresh-token via page body={body[:160]}")
-    return False
-
-
-async def _console_login_enterprise_via_page(
-    page: Any, state: str
-) -> dict[str, Any] | None:
-    state = str(state or "").strip()
-    if not state:
-        return None
-
-    status, payload, body = await _codebuddy_request_via_page(
-        page,
-        "POST",
-        f"{CODEBUDDY_CONSOLE_LOGIN_ENTERPRISE_ENDPOINT}?state={state}",
-    )
-    code = payload.get("code") if isinstance(payload, dict) else None
-    has_token = bool(((payload or {}).get("data") or {}).get("accessToken"))
-    _codebuddy_auth_debug(
-        f"console login enterprise via page status={status} code={code} has_token={has_token}"
-    )
-    if status == 200 and isinstance(payload, dict) and payload.get("code") == 0:
-        return payload
-    if status and body:
-        _codebuddy_auth_debug(f"console login enterprise via page body={body[:160]}")
-    return None
-
-
 async def _fetch_console_accounts(
     cookie_header: str, referer: str = ""
 ) -> dict[str, Any] | None:
@@ -2078,212 +1700,6 @@ async def _fetch_console_accounts(
     if payload.get("code") != 0 or not accounts:
         return None
     return payload
-
-
-async def _codebuddy_console_request(
-    method: str,
-    url: str,
-    cookie_header: str,
-    *,
-    referer: str = "",
-    params: dict[str, str] | None = None,
-    allow_redirects: bool = False,
-) -> tuple[int, dict[str, Any] | None, str, str]:
-    cookie_header = str(cookie_header or "").strip()
-    if not cookie_header:
-        return 0, None, "", ""
-
-    headers = {
-        **WEB_HEADERS,
-        "Cookie": cookie_header,
-        "Origin": CODEBUDDY_BASE_URL,
-    }
-    if referer:
-        headers["Referer"] = referer
-
-    timeout = aiohttp.ClientTimeout(total=20)
-    try:
-        async with _make_session(timeout, headers) as client:
-            async with client.request(
-                method.upper(),
-                url,
-                params=params,
-                allow_redirects=allow_redirects,
-                proxy=_req_proxy(client),
-            ) as resp:
-                status = int(resp.status)
-                final_url = str(resp.url)
-                body = await resp.text()
-    except Exception as exc:
-        _codebuddy_auth_debug(
-            f"console request failed method={method.upper()} url={url} err={exc}"
-        )
-        return 0, None, "", ""
-
-    payload: dict[str, Any] | None = None
-    try:
-        parsed = json.loads(body)
-        if isinstance(parsed, dict):
-            payload = parsed
-    except Exception:
-        payload = None
-
-    return status, payload, body, final_url
-
-
-async def _validate_refresh_token(cookie_header: str, referer: str = "") -> bool:
-    status, payload, body, _ = await _codebuddy_console_request(
-        "GET",
-        CODEBUDDY_CONSOLE_VALIDATE_REFRESH_TOKEN_ENDPOINT,
-        cookie_header,
-        referer=referer,
-    )
-    code = payload.get("code") if isinstance(payload, dict) else None
-    _codebuddy_auth_debug(f"validate refresh-token status={status} code={code}")
-    if status == 200 and isinstance(payload, dict) and payload.get("code") == 0:
-        return True
-    if status and body:
-        _codebuddy_auth_debug(f"validate refresh-token body={body[:160]}")
-    return False
-
-
-async def _console_login_enterprise(
-    cookie_header: str,
-    state: str,
-    *,
-    referer: str = "",
-    enterprise_id: str = "",
-) -> dict[str, Any] | None:
-    state = str(state or "").strip()
-    if not state:
-        return None
-
-    endpoint = CODEBUDDY_CONSOLE_LOGIN_ENTERPRISE_ENDPOINT
-    enterprise_id = str(enterprise_id or "").strip()
-    if enterprise_id:
-        endpoint = f"{endpoint.rstrip('/')}/{enterprise_id}"
-
-    status, payload, body, _ = await _codebuddy_console_request(
-        "POST",
-        endpoint,
-        cookie_header,
-        referer=referer,
-        params={"state": state},
-    )
-    code = payload.get("code") if isinstance(payload, dict) else None
-    has_token = bool(((payload or {}).get("data") or {}).get("accessToken"))
-    _codebuddy_auth_debug(
-        f"console login enterprise status={status} code={code} has_token={has_token}"
-    )
-    if status == 200 and isinstance(payload, dict) and payload.get("code") == 0:
-        return payload
-    if status and body:
-        _codebuddy_auth_debug(f"console login enterprise body={body[:160]}")
-    return None
-
-
-async def _console_auth_login(
-    cookie_header: str,
-    state: str,
-    *,
-    referer: str = "",
-    platform: str = CODEBUDDY_PLATFORM,
-    domain: str = "",
-) -> bool:
-    state = str(state or "").strip()
-    domain = str(domain or "").strip() or urlparse(CODEBUDDY_BASE_URL).netloc
-    if not state:
-        return False
-
-    status, payload, body, final_url = await _codebuddy_console_request(
-        "GET",
-        CODEBUDDY_CONSOLE_AUTH_LOGIN_ENDPOINT,
-        cookie_header,
-        referer=referer,
-        params={"platform": platform, "state": state, "domain": domain},
-        allow_redirects=False,
-    )
-    code = payload.get("code") if isinstance(payload, dict) else None
-    _codebuddy_auth_debug(
-        f"console auth login status={status} code={code} final_url={final_url or '-'}"
-    )
-    if status in (200, 302):
-        return True
-    if status and body:
-        _codebuddy_auth_debug(f"console auth login body={body[:160]}")
-    return False
-
-
-async def _complete_started_with_cookie(
-    cookie_header: str, state: str, referer: str = ""
-) -> bool:
-    cookie_header = str(cookie_header or "").strip()
-    if not cookie_header or not state:
-        return False
-
-    started_url = (
-        f"{CODEBUDDY_BASE_URL}/started?platform={CODEBUDDY_PLATFORM}&state={state}"
-    )
-    headers = {
-        **WEB_HEADERS,
-        "Cookie": cookie_header,
-    }
-    if referer:
-        headers["Referer"] = referer
-
-    try:
-        _codebuddy_auth_debug(f"started request={started_url}")
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with _make_session(timeout, headers) as client:
-            async with client.get(
-                started_url, allow_redirects=True, proxy=_req_proxy(client)
-            ) as resp:
-                final_url = str(resp.url)
-                status = int(resp.status)
-                body = await resp.text()
-        _codebuddy_auth_debug(f"started status={status} final_url={final_url}")
-        if status >= 500:
-            return False
-        if status == 404:
-            _codebuddy_auth_debug(f"started body={body[:160]}")
-            return False
-        return True
-    except Exception as exc:
-        _codebuddy_auth_debug(f"started request failed err={exc}")
-        return False
-
-
-async def _complete_started_in_browser(page: Any, state: str) -> bool:
-    if not state:
-        return False
-
-    started_url = (
-        f"{CODEBUDDY_BASE_URL}/started?platform={CODEBUDDY_PLATFORM}&state={state}"
-    )
-    try:
-        _codebuddy_auth_debug(f"started browser goto={started_url}")
-        await page.goto(started_url, wait_until="domcontentloaded", timeout=15000)
-    except Exception as exc:
-        _codebuddy_auth_debug(f"started browser goto failed err={exc}")
-
-    for _ in range(20):
-        try:
-            current_url = str(page.url)
-        except Exception:
-            current_url = ""
-        if current_url.startswith(CODEBUDDY_REDIRECT_SCHEME):
-            _codebuddy_auth_debug(f"started browser redirect url={current_url}")
-            return True
-        parsed = urlparse(current_url) if current_url else None
-        if (
-            parsed
-            and parsed.netloc == urlparse(CODEBUDDY_BASE_URL).netloc
-            and parsed.path == "/started"
-        ):
-            _codebuddy_auth_debug(f"started browser landed url={current_url}")
-            return True
-        await asyncio.sleep(0.5)
-    return False
 
 
 def _credit_from_resource_payload(
