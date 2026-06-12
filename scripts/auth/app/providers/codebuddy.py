@@ -2454,8 +2454,8 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
             manager = AsyncCamoufox(**camoufox_kwargs)
             browser = await manager.__aenter__()
             page = await browser.new_page()
-            page.set_default_timeout(15000)
-            await page.goto(auth_url, wait_until="domcontentloaded", timeout=20000)
+            page.set_default_timeout(30000)
+            await page.goto(auth_url, wait_until="domcontentloaded", timeout=45000)
 
             return {
                 "stub": False,
@@ -2489,8 +2489,8 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
         try:
             # Try to create a new page from existing browser
             page = await browser.new_page()
-            page.set_default_timeout(15000)
-            await page.goto(auth_url, wait_until="domcontentloaded", timeout=25000)
+            page.set_default_timeout(30000)
+            await page.goto(auth_url, wait_until="domcontentloaded", timeout=45000)
             session["page"] = page
             _codebuddy_auth_debug("browser page restarted successfully (new page from existing browser)")
             return page
@@ -2653,9 +2653,9 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
         email_step_started_at: float | None = None
         _codebuddy_base_netloc = urlparse(CODEBUDDY_BASE_URL).netloc
 
-        # Global wall-clock timeout: 90s max for the entire authenticate loop.
-        # Prevents infinite spin from broken pages or unhandled states.
-        _auth_wall_clock_deadline = time.monotonic() + 90.0
+        # Global wall-clock timeout: 150s max for the entire authenticate loop.
+        # Generous enough for slow connections/proxies, still prevents infinite spin.
+        _auth_wall_clock_deadline = time.monotonic() + 150.0
 
         # Progress tracking — emit each step only once
         _progress_emitted: set[str] = set()
@@ -2665,7 +2665,7 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
             if time.monotonic() > _auth_wall_clock_deadline:
                 raise RetryableBatcherError(
                     ErrorCode.auth_temporary_failure,
-                    "codebuddy authenticate exceeded 90s wall-clock timeout",
+                    "codebuddy authenticate exceeded 150s wall-clock timeout",
                 )
             try:
                 current_url = page.url
@@ -2784,7 +2784,7 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
                         if auth_url:
                             _codebuddy_auth_debug(f"retrying auth from scratch: {auth_url[:80]}")
                             await asyncio.sleep(2.0)
-                            await page.goto(auth_url, wait_until="domcontentloaded", timeout=20000)
+                            await page.goto(auth_url, wait_until="domcontentloaded", timeout=45000)
                             landing_transition_deadline = time.monotonic() + 10.0
                             await asyncio.sleep(1.0)
                             continue
