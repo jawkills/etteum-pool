@@ -2578,12 +2578,29 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
 
         page = session.get("page") if isinstance(session, dict) else None
         if page is None:
+            # No browser page — try cookie-based fallback directly
+            cookie_header = tokens.get("web_cookie", "")
+            if cookie_header:
+                _codebuddy_auth_debug("fetch_quota: no page, trying cookie fallback")
+                return await self._fetch_user_resource_credit(cookie_header)
             return None
 
         # Retry with page restart on browser crash (up to 2 restarts)
         for _quota_attempt in range(3):
             try:
-                return await self._fetch_quota_inner(page, session)
+                result = await self._fetch_quota_inner(page, session)
+                if result is not None:
+                    return result
+                # _fetch_quota_inner returned None (billing API flaky) — try cookie fallback
+                cookie_header = tokens.get("web_cookie", "")
+                if cookie_header:
+                    _codebuddy_auth_debug(
+                        "fetch_quota: page-based fetch returned None, trying cookie fallback"
+                    )
+                    cookie_result = await self._fetch_user_resource_credit(cookie_header)
+                    if cookie_result:
+                        return cookie_result
+                return None
             except Exception as exc:
                 if is_browser_crash(exc) and _quota_attempt < 2:
                     _codebuddy_auth_debug(
@@ -2594,13 +2611,18 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
                         page = await self._restart_browser_page(session)
                     except Exception:
                         _codebuddy_auth_debug("browser restart failed in fetch_quota")
-                        return None
+                        break
                     continue
-                # Non-crash errors — just return None (quota is best-effort)
+                # Non-crash errors — break to try cookie fallback
                 _codebuddy_auth_debug(f"fetch_quota error: {str(exc)[:120]}")
-                return None
+                break
 
-        _codebuddy_auth_debug("fetch_quota exhausted all crash retries")
+        # All page-based attempts failed — last resort: cookie fallback
+        cookie_header = tokens.get("web_cookie", "")
+        if cookie_header:
+            _codebuddy_auth_debug("fetch_quota: all page attempts failed, final cookie fallback")
+            return await self._fetch_user_resource_credit(cookie_header)
+        _codebuddy_auth_debug("fetch_quota exhausted all retries and no cookie available")
         return None
 
     async def _fetch_quota_inner(
@@ -2612,17 +2634,17 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
         gift_claimed, gift_credits = await self._try_claim_gift_via_api(page)
 
         # 2. Fetch credit balance via API (no page navigation needed)
-        # Retry up to 4 times — credits may take a moment to provision after trial activation
+        # Retry up to 6 times — billing API is flaky (intermittent 500s)
         _codebuddy_auth_debug("fetching credit balance via API")
-        for attempt in range(4):
+        for attempt in range(6):
             if attempt > 0:
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(2.0 + attempt * 0.5)
 
             credit_summary = await _fetch_user_resource_credit_via_page(page)
             if credit_summary:
                 remain = credit_summary.get("credit_capacity_remain", 0)
                 # If remain is 0 but we just activated trial, wait and retry
-                if remain <= 0 and attempt < 3:
+                if remain <= 0 and attempt < 5:
                     _codebuddy_auth_debug(
                         f"credit remain=0 on attempt {attempt+1}, retrying..."
                     )
@@ -2635,8 +2657,12 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
                     f"size={credit_summary.get('credit_capacity_size')}"
                 )
                 return credit_summary
+            else:
+                _codebuddy_auth_debug(
+                    f"credit via page returned None on attempt {attempt+1}/6"
+                )
 
-        _codebuddy_auth_debug("credit API failed — returning None")
+        _codebuddy_auth_debug("credit API failed after 6 attempts — returning None")
         return None
 
     async def _try_claim_gift_via_api(self, page: Any) -> tuple[bool, float]:
