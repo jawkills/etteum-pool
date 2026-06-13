@@ -214,7 +214,12 @@ export default function Requests() {
               {typeof getCreditMeta(selected).creditRate === "number" && <> · Rate: <span className="text-[var(--foreground)]">{getCreditMeta(selected).creditRate}</span></>}
             </div>
 
-            {selected.compressionStats && <CompressionPanel stats={selected.compressionStats} />}
+            {selected.compressionStats && (
+              <CompressionPanel
+                stats={selected.compressionStats}
+                promptTokens={selected.promptTokens}
+              />
+            )}
 
             <div className="mt-5 space-y-1">
               <p className="text-xs uppercase text-[var(--muted-foreground)]">Account</p>
@@ -258,11 +263,33 @@ function formatNum(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-function CompressionPanel({ stats }: { stats: CompressionStats }) {
-  const { tokensBefore, tokensAfter, saved, savedPct, byTechnique = {}, durationMs } = stats;
+function CompressionPanel({
+  stats,
+  promptTokens,
+}: {
+  stats: CompressionStats;
+  promptTokens: number | null;
+}) {
+  const { tokensBefore, tokensAfter, saved, byTechnique = {}, durationMs } = stats;
   const techEntries = Object.entries(byTechnique).filter(([, v]) => typeof v === "number" && v > 0) as Array<
     [keyof typeof TECHNIQUE_LABELS, number]
   >;
+
+  // Best practice: anchor the displayed before/after to provider-reported
+  // prompt_tokens (ground truth) instead of our char/4 heuristic. Our internal
+  // estimate is only used to allocate per-technique attribution; for the
+  // headline numbers we trust the upstream usage.prompt_tokens.
+  //
+  // Formula:
+  //   actualBefore = promptTokens + saved   (what would have been billed without compression)
+  //   actualAfter  = promptTokens           (what was actually billed)
+  //   actualPct    = saved / actualBefore   (real savings ratio)
+  //
+  // If promptTokens is missing/0 (e.g. error response), fall back to our estimate.
+  const hasProviderTruth = typeof promptTokens === "number" && promptTokens > 0;
+  const displayAfter = hasProviderTruth ? promptTokens : tokensAfter;
+  const displayBefore = hasProviderTruth ? promptTokens + saved : tokensBefore;
+  const displayPct = displayBefore > 0 ? (saved / displayBefore) * 100 : 0;
 
   // No real savings on this request — show a muted "ran but no-op" line.
   if (saved <= 0) {
@@ -284,11 +311,19 @@ function CompressionPanel({ stats }: { stats: CompressionStats }) {
       <div className="mt-2 flex items-baseline gap-2">
         <span className="text-xl font-bold text-[var(--success)]">−{formatNum(saved)}</span>
         <span className="text-xs text-[var(--muted-foreground)]">tokens saved</span>
-        <span className="ml-auto text-sm font-semibold text-[var(--success)]">{savedPct.toFixed(2)}%</span>
+        <span className="ml-auto text-sm font-semibold text-[var(--success)]">{displayPct.toFixed(2)}%</span>
       </div>
 
-      <div className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-        {formatNum(tokensBefore)} <span className="opacity-50">→</span> {formatNum(tokensAfter)} tokens
+      <div
+        className="mt-1 text-[11px] text-[var(--muted-foreground)]"
+        title={
+          hasProviderTruth
+            ? `Anchored to provider-reported prompt_tokens (${formatNum(promptTokens!)}). Internal estimate was ${formatNum(tokensBefore)} → ${formatNum(tokensAfter)}.`
+            : "Internal char/4 estimate (provider usage not available)"
+        }
+      >
+        {formatNum(displayBefore)} <span className="opacity-50">→</span> {formatNum(displayAfter)} tokens
+        {hasProviderTruth && <span className="ml-1 opacity-50">· actual</span>}
       </div>
 
       {techEntries.length > 0 && (
