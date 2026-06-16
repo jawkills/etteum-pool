@@ -10,6 +10,7 @@ import { warmupQueue } from "../auth/warmup-queue";
 import { warmupAccount } from "../auth/warmup-runner";
 import { pool, type ProviderName } from "../proxy/pool";
 import { activateQoderPat } from "../proxy/providers/qoder";
+import { activateYouMindKey } from "../proxy/providers/youmind";
 
 export const accountsRouter = new Hono();
 
@@ -890,10 +891,11 @@ accountsRouter.get("/:id", async (c) => {
  */
 accountsRouter.post("/", async (c) => {
   const body = await c.req.json<{
-    provider: "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo";
+    provider: "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
     email?: string;
     password?: string;
     personalToken?: string;
+    apiKey?: string; // YouMind sk-ym-... key
     tokens?: Record<string, unknown>;
     status?: "active" | "pending";
     browserEngine?: string;
@@ -944,6 +946,62 @@ accountsRouter.post("/", async (c) => {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return c.json({ error: `Qoder PAT activation failed: ${msg}` }, 400);
+    }
+  }
+
+  // ── YouMind: API key paste flow (sk-ym-...) ────────────────────────
+  // Mirrors the Qoder PAT branch above: validate the key against YouMind's
+  // OpenAPI relay, derive a stable email-like label from the user's space_id,
+  // then upsert by (provider, email) so re-pasting the same key updates the
+  // existing row instead of erroring on the unique-index conflict.
+  if (body.provider === "youmind" && body.apiKey) {
+    const trimmed = body.apiKey.trim();
+    if (!trimmed) return c.json({ error: "apiKey is empty" }, 400);
+
+    try {
+      const { email, metadata } = await activateYouMindKey(trimmed);
+      const encryptedKey = encrypt(trimmed);
+
+      const existing = await db.select().from(accounts)
+        .where(eq(accounts.email, email))
+        .then((rows) => rows.find((r) => r.provider === "youmind"));
+
+      if (existing) {
+        await db.update(accounts).set({
+          password: encryptedKey,
+          status: "active",
+          tokens: null,
+          metadata: metadata as unknown,
+          errorMessage: null,
+          lastLoginAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(accounts.id, existing.id));
+        pool.invalidate("youmind");
+        broadcast({ type: "account_updated", data: { id: existing.id, provider: "youmind", status: "active" } });
+        return c.json({ id: existing.id, provider: "youmind", email, status: "active", updated: true }, 200);
+      }
+
+      const inserted = await db.insert(accounts).values({
+        provider: "youmind",
+        email,
+        password: encryptedKey,
+        status: "active",
+        tokens: null,
+        metadata: metadata as unknown,
+        // YouMind doesn't expose per-account credit numbers via OpenAPI; use
+        // -1 sentinel ("unlimited / unknown") so the warmup runner won't flip
+        // the account to exhausted on a real positive limit.
+        quotaLimit: -1,
+        quotaRemaining: -1,
+        lastLoginAt: new Date(),
+      }).returning();
+      const created = inserted[0]!;
+      pool.invalidate("youmind");
+      broadcast({ type: "account_created", data: { id: created.id, provider: "youmind", email } });
+      return c.json({ ...created, password: "***", tokens: null }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `YouMind API key activation failed: ${msg}` }, 400);
     }
   }
 

@@ -6,6 +6,7 @@ import { CodexProvider } from "./codex";
 import { QoderProvider } from "./qoder";
 import { ByokProvider } from "./byok";
 import { GitlabDuoProvider } from "./gitlab-duo";
+import { YouMindProvider } from "./youmind";
 
 /**
  * Single source of truth for the provider set.
@@ -30,14 +31,17 @@ const codex = new CodexProvider();
 const qoder = new QoderProvider();
 const byok = new ByokProvider();
 const gitlabDuo = new GitlabDuoProvider();
+const youmind = new YouMindProvider();
 
-// Priority order. canva/qoder/codex/kiro-pro have unique prefixes; codex is
-// listed before codebuddy so the literal "gpt-5-codex" resolves to codex while
-// codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks dynamic
-// prefixes from DB accounts. kiro is the fallback. gitlab-duo owns
+// Priority order. canva/qoder/codex/kiro-pro/youmind have unique prefixes; codex
+// is listed before codebuddy so the literal "gpt-5-codex" resolves to codex
+// while codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks
+// dynamic prefixes from DB accounts. kiro is the fallback. gitlab-duo owns
 // `claude_(haiku|sonnet|opus)_<digit>...` underscore-style identifiers — no
-// overlap with any other provider, so position is not load-bearing.
-const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, byok, codebuddy, kiro] as const;
+// overlap with any other provider, so position is not load-bearing. youmind
+// owns the `ym-*` prefix exclusively — also position-independent, but slotted
+// alongside the other prefix-based providers for readability.
+const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, byok, codebuddy, kiro] as const;
 
 export const providers = {
   kiro,
@@ -48,6 +52,7 @@ export const providers = {
   qoder,
   byok,
   "gitlab-duo": gitlabDuo,
+  youmind,
 } as const;
 
 export type ProviderName = keyof typeof providers;

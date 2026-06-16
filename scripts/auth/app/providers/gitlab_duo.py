@@ -355,25 +355,27 @@ async def _click_google_next(page: Any) -> bool:
         return False
 
 
-async def _click_continue_or_allow(page: Any) -> bool:
-    """JS-click any visible 'Continue' / 'Allow' / 'Lanjutkan' / 'Sign in as X'
-    button. Used for: account picker confirmation, OAuth consent screen, and
-    'Continue as <name>' on /signin/oauth/* pages.
+async def _click_consent_only(page: Any) -> bool:
+    """Klik HANYA tombol consent OAuth: text 'continue' (exact) atau
+    contains 'allow' / 'lanjut' / 'lanjutkan' / 'izinkan'.
+
+    Sengaja TIDAK menerima keyword umum seperti 'next', 'masuk', 'sign in',
+    'ok', 'got it' — itu sumber misclick di halaman challenge (mis. tombol
+    'Try another way' atau secondary button di selection page).
+
+    Mirror codebuddy._handle_google_consent_continue.
     """
     try:
         return bool(
             await page.evaluate(
                 """() => {
-                    const keywords = [
-                        'continue', 'allow', 'next',
-                        'lanjut', 'lanjutkan', 'izinkan', 'masuk',
-                        'continue as', 'sign in as',
-                    ];
+                    const exact = new Set(['continue', 'lanjut', 'lanjutkan', 'izinkan']);
+                    const contains = ['allow'];
                     for (const el of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
                         if (el.offsetParent === null) continue;
                         const txt = (el.textContent || el.value || '').trim().toLowerCase();
                         if (!txt || txt.length > 60) continue;
-                        if (keywords.some(k => txt === k || txt.startsWith(k + ' ') || txt.includes(k))) {
+                        if (exact.has(txt) || contains.some(k => txt.includes(k))) {
                             el.click();
                             return true;
                         }
@@ -384,6 +386,82 @@ async def _click_continue_or_allow(page: Any) -> bool:
         )
     except Exception:
         return False
+
+
+async def _click_picker_continue(page: Any) -> bool:
+    """Klik tombol 'Continue as <name>' / 'Sign in as <name>' di account
+    picker / oauthchooseaccount page. Pisah dari consent supaya tidak
+    bocor ke halaman lain."""
+    try:
+        return bool(
+            await page.evaluate(
+                """() => {
+                    const prefixes = ['continue as', 'sign in as', 'masuk sebagai', 'lanjutkan sebagai'];
+                    for (const el of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                        if (el.offsetParent === null) continue;
+                        const txt = (el.textContent || el.value || '').trim().toLowerCase();
+                        if (!txt || txt.length > 80) continue;
+                        if (prefixes.some(p => txt.startsWith(p))) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _handle_google_interstitial(page: Any) -> bool:
+    """Klik tombol konfirmasi di halaman antara Google: speedbump/gaplustos,
+    /challenge/dp (device prompt), /challenge/selection ("How do you want to
+    verify"), /challenge/ipp ("It's you") yang punya tombol
+    Continue/Confirm/Understand.
+
+    Mirror codebuddy._handle_google_gaplustos: keyword multi-bahasa, exact
+    atau prefix-match supaya tidak bocor ke tombol generic.
+    """
+    try:
+        return bool(
+            await page.evaluate(
+                """() => {
+                    // Exact-match supaya tidak misclick — tombol challenge Google
+                    // selalu pakai label pendek dan bersih ('Continue', 'Confirm',
+                    // 'I understand', 'Got it', 'Lanjutkan', 'Mengerti').
+                    const exact = new Set([
+                        'continue', 'confirm', 'i understand', 'got it', 'ok',
+                        'lanjut', 'lanjutkan', 'konfirmasi', 'mengerti', 'oke',
+                        'yes', 'ya', "it's me", 'yes, it\\'s me',
+                    ]);
+                    for (const el of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                        if (el.offsetParent === null) continue;
+                        const txt = (el.textContent || el.value || '').trim().toLowerCase();
+                        if (!txt || txt.length > 30) continue;
+                        if (exact.has(txt)) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+# Backwards-compat alias agar kode lama yang masih reference `_click_continue_or_allow`
+# tidak crash. Akan dihapus setelah semua caller migrasi.
+async def _click_continue_or_allow(page: Any) -> bool:
+    """DEPRECATED: dipecah jadi _click_consent_only / _click_picker_continue /
+    _handle_google_interstitial. Shim ini delegasi ke ketiganya secara berurutan."""
+    if await _click_picker_continue(page):
+        return True
+    if await _handle_google_interstitial(page):
+        return True
+    return await _click_consent_only(page)
 
 
 async def _fill_google_email_step(page: Any, email: str) -> bool:
@@ -496,40 +574,123 @@ async def _fill_google_password_step(page: Any, password: str) -> bool:
     return False
 
 
-# Google sub-paths that mean we are challenged / blocked — non-retryable.
-_TWOFA_MARKERS = (
-    "/challenge/totp",
-    "/challenge/ipp",
-    "/challenge/dp",
-    "/challenge/iap",
-    "/challenge/sk",
-    "/challenge/skotp",
-    "/challenge/recaptcha",
-    "/challenge/selection",
-    "speedbump",
-    "phoneverify",
+# Google challenge classification.
+#
+# Sebelumnya semua /challenge/* + speedbump dianggap fatal 2FA. Itu BUG:
+# halaman seperti /challenge/dp (device prompt), /challenge/selection
+# ("How do you want to verify it's you"), /challenge/ipp, dan /speedbump/
+# (gaplustos) sering muncul di first-login dari device/IP baru bahkan ketika
+# akun TIDAK punya 2FA aktif — dan punya tombol Continue/Confirm yang valid
+# untuk diklik. Codebuddy tidak pernah memperlakukan URL ini sebagai fail.
+#
+# Aturan baru:
+#   • _HARD_FAIL_MARKERS: benar-benar butuh 2FA/captcha → NonRetryable.
+#   • _SOFT_INTERSTITIAL_MARKERS: halaman antara — coba klik Continue/Confirm
+#     via _handle_google_interstitial; tidak pernah raise di sini.
+_HARD_FAIL_MARKERS = (
+    "/challenge/totp",       # Authenticator code
+    "/challenge/skotp",      # Backup code (variant of totp)
+    "/challenge/sk",         # Security key
+    "/challenge/recaptcha",  # Captcha — bot tidak bisa solve
+    "phoneverify",           # SMS phone verify
+    "phoneinfo",             # Phone number challenge
+)
+
+_SOFT_INTERSTITIAL_MARKERS = (
+    "/challenge/dp",        # Device prompt — punya tombol Confirm
+    "/challenge/ipp",       # Identity / "It's you" prompt
+    "/challenge/iap",       # Identity-aware proxy interstitial
+    "/challenge/selection", # "How do you want to verify" — pilih Continue
+    "/speedbump/",          # gaplustos security speedbump
+    "gaplustos",
 )
 
 
-async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_s: int = 90) -> str:
+def _classify_google_url(url: str) -> str:
+    """Return 'hard_fail' / 'soft_interstitial' / 'normal'.
+
+    Path-aware (urlparse) supaya tidak salah-match substring di query string
+    (mis. tombol Continue dengan param `continue=https://...&...&challenge=`).
+    Marker dengan leading slash di-substring-match terhadap path; marker tanpa
+    slash di-substring-match terhadap full host+path (untuk frase seperti
+    'phoneverify' / 'gaplustos').
+    """
+    if not url:
+        return "normal"
+    try:
+        parsed = urlparse(url)
+        path = parsed.path or ""
+        host = parsed.netloc or ""
+    except Exception:
+        return "normal"
+
+    full = f"{host}{path}"
+    for m in _HARD_FAIL_MARKERS:
+        if m.startswith("/"):
+            if m in path:
+                return "hard_fail"
+        elif m in full:
+            return "hard_fail"
+    for m in _SOFT_INTERSTITIAL_MARKERS:
+        if m.startswith("/"):
+            if m in path:
+                return "soft_interstitial"
+        elif m in full:
+            return "soft_interstitial"
+    return "normal"
+
+
+# Backwards-compat alias — beberapa caller (lihat _wait_for_gitlab_post_oauth
+# dulu) mungkin masih reference nama lama. Marker hard-fail saja.
+_TWOFA_MARKERS = _HARD_FAIL_MARKERS
+
+
+async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_s: int = 120) -> str:
     """Drive the Google OAuth flow until the browser lands back on gitlab.com.
 
-    State-machine: every iteration we sniff the page state (email step,
-    password step, account picker, consent screen, 2FA challenge, or already
-    redirected) and take the appropriate action. Idempotent — safe to spam.
+    Filosofi (mengikuti codebuddy.py):
+      • POSITIVE detection: kenali step yang dikenal (email/password/picker)
+        dan handle. Halaman lain di accounts.google.com → coba klik
+        Continue/Confirm/Allow secara LAYERED, bukan langsung fail.
+      • Hard fail SANGAT TERBATAS: hanya TOTP/SK/captcha/phone (lihat
+        _HARD_FAIL_MARKERS). /challenge/dp, /challenge/selection,
+        /speedbump — semua punya tombol Continue yang valid → di-handle.
+      • INACTIVITY TIMER (35s) — reset setiap URL berubah ATAU aksi sukses.
+        Jadi network lambat tidak bikin fail prematur, tapi stuck beneran
+        tetap ke-detect cepat.
 
     Returns the gitlab.com URL we landed on. Raises:
-      • NonRetryableBatcherError on real 2FA/captcha/phone challenge
-      • RetryableBatcherError on timeout
+      • NonRetryableBatcherError pada 2FA/captcha/phone (HARD_FAIL)
+      • RetryableBatcherError pada timeout / inactivity
     """
+    INACTIVITY_TIMEOUT = 35.0
     deadline = time.monotonic() + timeout_s
     last_url = ""
     last_state = ""
     email_typed = False
     password_typed = False
-    no_progress_since = time.monotonic()
+    last_progress_at = time.monotonic()
+
+    def _mark_progress(reason: str = "") -> None:
+        nonlocal last_progress_at
+        last_progress_at = time.monotonic()
+        if reason:
+            _debug(f"_drive_google: progress ({reason})")
 
     while time.monotonic() < deadline:
+        # Inactivity guard — kalau tidak ada perubahan URL atau aksi sukses
+        # dalam 35s, anggap stuck.
+        if time.monotonic() - last_progress_at > INACTIVITY_TIMEOUT:
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            raise RetryableBatcherError(
+                ErrorCode.auth_timeout,
+                f"Google OAuth stuck — no progress for {INACTIVITY_TIMEOUT}s "
+                f"(last url: {last_url}, title: {title!r})",
+            )
+
         try:
             url = page.url
         except Exception:
@@ -540,25 +701,50 @@ async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_
             _debug(f"_drive_google: returned to GitLab: {url}")
             return url
 
-        # === Hard fail: real 2FA / captcha / phone ===
-        if any(m in url for m in _TWOFA_MARKERS):
-            raise NonRetryableBatcherError(
-                ErrorCode.auth_2fa_required_but_missing,
-                f"Google challenge page (2FA/captcha): {url}",
-            )
-
         if url != last_url:
             _debug(f"_drive_google: url={url}")
             last_url = url
-            no_progress_since = time.monotonic()
+            _mark_progress("url-change")
 
-        # === State detection (mutually exclusive) ===
+        # === Tier-based challenge classification ===
+        challenge = _classify_google_url(url)
+
+        if challenge == "hard_fail":
+            raise NonRetryableBatcherError(
+                ErrorCode.auth_2fa_required_but_missing,
+                f"Google hard challenge (2FA/captcha/phone): {url}",
+            )
+
+        # === Off-Google host: redirecting, just wait briefly ===
         on_google = "accounts.google.com" in url
         if not on_google:
-            # Some other host (could be redirecting). Wait briefly.
             await asyncio.sleep(0.5)
             continue
 
+        # === Soft interstitial — Continue/Confirm button page ===
+        # Handle SEBELUM step detection karena halaman ini biasanya tidak
+        # punya input field email/password sehingga akan jatuh ke "other"
+        # dan kita ingin pakai handler khusus, bukan generic.
+        if challenge == "soft_interstitial":
+            if await _handle_google_interstitial(page):
+                _debug(f"_drive_google: interstitial handled on {url}")
+                _mark_progress("interstitial-clicked")
+                await asyncio.sleep(1.2)
+                continue
+            # Tidak ketemu tombol exact — coba consent-style fallback
+            # (kadang challenge selection juga punya tombol 'Try a different
+            # way' tapi tidak match exact list di atas; consent-only masih
+            # ketat enough).
+            if await _click_consent_only(page):
+                _debug(f"_drive_google: consent-only fallback on interstitial {url}")
+                _mark_progress("consent-fallback")
+                await asyncio.sleep(1.2)
+                continue
+            # Belum ketemu tombol — jangan fail, biarkan loop lanjut & log saja.
+            await asyncio.sleep(0.8)
+            continue
+
+        # === Step detection (mutually exclusive) ===
         at_password = await _is_password_step(page)
         at_email = False if at_password else await _is_email_step(page)
         at_picker = False
@@ -574,18 +760,20 @@ async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_
         if state != last_state:
             _debug(f"_drive_google: state={state}")
             last_state = state
-            no_progress_since = time.monotonic()
+            _mark_progress(f"state→{state}")
 
         # === Actions ===
         if at_picker:
             clicked = await _click_account_in_picker(page, email)
             if clicked:
                 _debug("_drive_google: clicked account in picker")
+                _mark_progress("picker-clicked")
                 await asyncio.sleep(1.5)
                 continue
-            # Fallback: click "Continue as ..."
-            if await _click_continue_or_allow(page):
-                _debug("_drive_google: clicked Continue/Allow on picker")
+            # Fallback: tombol "Continue as <name>"
+            if await _click_picker_continue(page):
+                _debug("_drive_google: clicked Continue-as on picker")
+                _mark_progress("picker-continue")
                 await asyncio.sleep(1.5)
                 continue
             await asyncio.sleep(0.6)
@@ -596,12 +784,13 @@ async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_
                 _debug("_drive_google: filling password")
                 if await _fill_google_password_step(page, password):
                     password_typed = True
+                    _mark_progress("password-filled")
                     await asyncio.sleep(1.5)
                     continue
                 # Fill failed — page may have re-rendered, try next iteration
                 await asyncio.sleep(0.8)
                 continue
-            # Password already typed; just spam Next in case loading overlay ate the click
+            # Password already typed; spam Next in case loading overlay ate the click
             await _click_google_next(page)
             await asyncio.sleep(0.8)
             continue
@@ -611,6 +800,7 @@ async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_
                 _debug("_drive_google: filling email")
                 if await _fill_google_email_step(page, email):
                     email_typed = True
+                    _mark_progress("email-filled")
                     await asyncio.sleep(1.5)
                     continue
                 await asyncio.sleep(0.8)
@@ -619,22 +809,19 @@ async def _drive_google_to_gitlab(page: Any, email: str, password: str, timeout_
             await asyncio.sleep(0.8)
             continue
 
-        # === Other Google page (consent, "continue as X", etc.) ===
-        # Try generic Continue/Allow.
-        if await _click_continue_or_allow(page):
-            _debug(f"_drive_google: clicked generic Continue/Allow on {url}")
+        # === Other Google page (consent screen / "Continue as X" / unknown) ===
+        # Layered click: picker-continue → consent-only. JANGAN pakai keyword
+        # generic 'next/ok/sign in' supaya tidak misclick di edge cases.
+        if await _click_picker_continue(page):
+            _debug(f"_drive_google: picker-continue on {url}")
+            _mark_progress("other-picker-continue")
             await asyncio.sleep(1.2)
             continue
-
-        # No progress for >12s on the same state — probably stuck on a screen
-        # we don't recognize. Take a screenshot for debugging if enabled.
-        if time.monotonic() - no_progress_since > 12.0:
-            try:
-                title = await page.title()
-                _debug(f"_drive_google: no progress for 12s; state={state} url={url} title={title!r}")
-            except Exception:
-                pass
-            no_progress_since = time.monotonic()  # reset to avoid log spam
+        if await _click_consent_only(page):
+            _debug(f"_drive_google: consent-only on {url}")
+            _mark_progress("other-consent")
+            await asyncio.sleep(1.2)
+            continue
 
         await asyncio.sleep(0.6)
 
@@ -666,10 +853,13 @@ async def _fill_google_login(page: Any, email: str, password: str) -> None:
         except Exception:
             url = ""
 
-        if any(m in url for m in _TWOFA_MARKERS):
+        # Hanya hard-fail untuk 2FA betulan — soft interstitial (dp/selection/
+        # speedbump) dilewatkan ke _drive_google_to_gitlab / post-oauth wait
+        # supaya tombol Continue-nya bisa diklik.
+        if _classify_google_url(url) == "hard_fail":
             raise NonRetryableBatcherError(
                 ErrorCode.auth_2fa_required_but_missing,
-                f"Google challenge page (2FA/captcha): {url}",
+                f"Google hard challenge (2FA/captcha/phone): {url}",
             )
 
         if url != last_url:
@@ -687,7 +877,8 @@ async def _fill_google_login(page: Any, email: str, password: str) -> None:
             await _fill_google_password_step(page, password)
             await asyncio.sleep(1.5)
             continue
-        # Picker / consent / other — let _wait_for_gitlab_post_oauth handle it
+        # Picker / consent / interstitial / other — let _wait_for_gitlab_post_oauth
+        # / _drive_google_to_gitlab handle it dengan layered click.
         return
 
     # If we got here without leaving Google, downstream wait will catch it.
@@ -695,95 +886,73 @@ async def _fill_google_login(page: Any, email: str, password: str) -> None:
 
 
 async def _click_consent_continue(page: Any) -> bool:
-    """Backwards-compat shim — delegates to the unified
-    `_click_continue_or_allow` helper which handles consent screens, account
-    pickers, and "Continue as <name>" pages alike."""
+    """Backwards-compat shim untuk kode lama. Sekarang LAYERED:
+    interstitial → picker-continue → consent-only."""
     try:
-        return await _click_continue_or_allow(page)
+        if await _handle_google_interstitial(page):
+            return True
+        if await _click_picker_continue(page):
+            return True
+        return await _click_consent_only(page)
     except Exception:
         return False
 
 
-# Stale block kept here only to avoid breaking imports — replaced by
-# `_click_continue_or_allow` above. The body below is unreachable.
-async def _click_consent_continue_OLD(page: Any) -> bool:
-    try:
-        return bool(
-            await page.evaluate(
-                """() => {
-                    const els = document.querySelectorAll('button, div[role="button"]');
-                    for (const el of els) {
-                        if (el.offsetParent === null) continue;
-                        const txt = (el.textContent || '').trim().toLowerCase();
-                        if (!txt) continue;
-                        if (
-                            txt === 'continue' ||
-                            txt === 'allow' ||
-                            txt === 'lanjut' ||
-                            txt === 'lanjutkan' ||
-                            txt === 'izinkan' ||
-                            txt.includes('allow') ||
-                            (txt.includes('continue') && txt.length < 20)
-                        ) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }"""
-            )
-        )
-    except Exception:
-        return False
-
-
-async def _wait_for_gitlab_post_oauth(page: Any, timeout_s: int = 60) -> str:
+async def _wait_for_gitlab_post_oauth(page: Any, timeout_s: int = 90) -> str:
     """After Google approves, the browser bounces to GitLab. Returns the URL
     we actually landed on (could be identity_verification, welcome, dashboard,
     etc — caller branches on it).
 
-    Handles the Google OAuth consent screen ("GitLab wants to access your
-    Google Account") which appears for first-time logins — auto-clicks
-    Continue / Allow / Lanjut.
-
-    If we're stuck on accounts.google.com with a real 2FA / phone / captcha
-    path, bail fast as non-retryable.
+    Sekarang pakai layered handling yang sama dengan _drive_google_to_gitlab:
+      • _HARD_FAIL_MARKERS → NonRetryable
+      • _SOFT_INTERSTITIAL_MARKERS → klik via _handle_google_interstitial
+      • OAuth consent screen → klik via _click_consent_only / _click_picker_continue
+      • Inactivity timer (35s) — reset setiap URL berubah
     """
+    INACTIVITY_TIMEOUT = 35.0
     deadline = time.monotonic() + timeout_s
     last_url = ""
+    last_progress_at = time.monotonic()
+
     while time.monotonic() < deadline:
+        if time.monotonic() - last_progress_at > INACTIVITY_TIMEOUT:
+            raise RetryableBatcherError(
+                ErrorCode.auth_timeout,
+                f"post-oauth wait stuck for {INACTIVITY_TIMEOUT}s (last url: {last_url})",
+            )
         try:
             url = page.url
             if url != last_url:
                 _debug(f"_wait_for_gitlab_post_oauth: url={url}")
                 last_url = url
+                last_progress_at = time.monotonic()
             if "gitlab.com" in url and "accounts.google" not in url:
                 return url
-            # Detect Google "couldn't find your account" / 2FA / captcha.
-            # NOTE: /challenge/pwd is the password step, NOT 2FA — let it pass.
+
             if "accounts.google.com" in url:
-                twofa_markers = (
-                    "/challenge/totp", "/challenge/ipp", "/challenge/dp",
-                    "/challenge/iap", "/challenge/sk", "/challenge/skotp",
-                    "/challenge/recaptcha", "/challenge/selection",
-                    "speedbump", "phoneverify",
-                )
-                if any(s in url for s in twofa_markers):
+                challenge = _classify_google_url(url)
+                if challenge == "hard_fail":
                     raise NonRetryableBatcherError(
                         ErrorCode.auth_2fa_required_but_missing,
-                        f"Google challenge page (2FA/captcha): {url}",
+                        f"Google hard challenge (2FA/captcha/phone): {url}",
                     )
-                # OAuth consent screen ("GitLab wants access to your account")
-                # appears on first-time logins. Click Continue / Allow / Lanjut.
-                if "signin/oauth/consent" in url or "/oauth/consent" in url or "oauthchooseaccount" in url:
-                    clicked = await _click_consent_continue(page)
-                    if clicked:
-                        _debug("clicked OAuth consent Continue button")
+                if challenge == "soft_interstitial":
+                    if await _handle_google_interstitial(page):
+                        _debug("post-oauth: interstitial handled")
+                        last_progress_at = time.monotonic()
+                        await asyncio.sleep(1.0)
+                # OAuth consent screen path ("GitLab wants access to your account")
+                elif "signin/oauth/consent" in url or "/oauth/consent" in url or "oauthchooseaccount" in url:
+                    if await _click_picker_continue(page) or await _click_consent_only(page):
+                        _debug("post-oauth: consent/picker clicked")
+                        last_progress_at = time.monotonic()
                         await asyncio.sleep(1.0)
                 else:
-                    # Even if URL doesn't match, opportunistically click any
-                    # Continue/Allow button on Google domain (handles edge cases).
-                    await _click_consent_continue(page)
+                    # Edge case: tombol Continue mungkin muncul di halaman lain
+                    # tanpa marker URL. Coba consent-only saja (ketat), bukan
+                    # generic.
+                    if await _click_consent_only(page):
+                        last_progress_at = time.monotonic()
                 if "/identifier" in url:
                     # Still on the email step — likely "couldn't find account"
                     try:
@@ -1481,19 +1650,46 @@ async def _maybe_fill_welcome_form(page: Any) -> None:
     await asyncio.sleep(3.0)
 
 
-async def _maybe_fill_groups_form(page: Any, email: str) -> None:
+async def _maybe_fill_groups_form(page: Any, email: str) -> str:
     """Fill /users/sign_up/groups/new — the group creation step that fresh
     accounts MUST complete before reaching the dashboard.
 
     The form has a single text input for the group name. We derive a name
     from the email local-part (alphanumeric only, max 30 chars).
+
+    Returns the group name actually submitted (caller can correlate dengan
+    namespace path nantinya). Raises RetryableBatcherError kalau:
+      • Tidak pernah sampai di /users/sign_up/groups/new dalam 15s
+      • Submit gagal 3x berturut-turut
+
+    PERUBAHAN: Sebelumnya early-return tanpa poll → race dengan redirect
+    lambat. Sekarang poll 15s. Sebelumnya silent give-up after 3 attempts →
+    caller tidak tahu fail. Sekarang raise eksplisit.
     """
     try:
         url = page.url
     except Exception:
         url = ""
+    # Poll redirect — submit welcome form sometimes takes 5–10s untuk redirect
+    # ke /groups/new. Tanpa poll, fungsi ini langsung return → namespace tidak
+    # pernah dibuat → trial_claim fail dengan "Could not resolve namespace_id".
     if "/users/sign_up/groups/new" not in url:
-        return  # Not on the group creation step
+        _debug(f"_maybe_fill_groups_form: waiting for redirect (current: {url})")
+        for i in range(15):
+            await asyncio.sleep(1.0)
+            try:
+                if "/users/sign_up/groups/new" in page.url:
+                    url = page.url
+                    _debug(f"_maybe_fill_groups_form: arrived at groups/new after {i+1}s")
+                    break
+            except Exception:
+                continue
+        if "/users/sign_up/groups/new" not in url:
+            # Caller mungkin sudah lewat group step (akun half-onboarded).
+            # Bukan tugas kita untuk raise di sini — biarkan caller verify
+            # via _wait_for_dashboard_or_project (yang cek group exists).
+            _debug(f"_maybe_fill_groups_form: not on groups/new after 15s poll, skipping (url={url})")
+            return ""
 
     # Wait for the form to render
     try:
@@ -1555,6 +1751,7 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
 
     # Try filling + submitting up to 3 times — on validation failure (taken path,
     # too short, etc.) we regenerate the suffix and retry.
+    last_errs: list[str] = []
     for attempt in range(3):
         # Group name
         group_name_selectors = (
@@ -1579,7 +1776,10 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
 
         if not group_filled:
             _debug("_maybe_fill_groups_form: could NOT fill group name")
-            return
+            raise RetryableBatcherError(
+                ErrorCode.browser_unexpected_state,
+                f"Group name input not found on /users/sign_up/groups/new (url={page.url})",
+            )
 
         # Project name (also required — the submit button is "Create project")
         project_name_selectors = (
@@ -1623,7 +1823,10 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
 
         if not submitted:
             _debug("_maybe_fill_groups_form: could NOT click submit")
-            return
+            raise RetryableBatcherError(
+                ErrorCode.browser_unexpected_state,
+                f"Submit button not found on /users/sign_up/groups/new (url={page.url})",
+            )
 
         # Wait for navigation away from /groups/new — up to 25s.
         success = False
@@ -1640,11 +1843,12 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
                 break
 
         if success:
-            return
+            return name
 
         # Validation likely failed. Capture error text + dump HTML.
+        err_list: list[str] = []
         try:
-            err_text = await page.evaluate(
+            err_list = await page.evaluate(
                 """() => {
                     const errs = [];
                     for (const el of document.querySelectorAll('.gl-alert, .gl-alert-danger, [role="alert"], .invalid-feedback, .form-text.gl-text-red-500, .gl-field-error-message')) {
@@ -1653,10 +1857,11 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
                     }
                     return errs;
                 }"""
-            )
-            _debug(f"_maybe_fill_groups_form[a{attempt}]: errors after submit = {err_text!r}")
+            ) or []
+            _debug(f"_maybe_fill_groups_form[a{attempt}]: errors after submit = {err_list!r}")
         except Exception:
             pass
+        last_errs = err_list
 
         # Regenerate suffix and retry.
         suffix = secrets.token_hex(4)
@@ -1664,23 +1869,79 @@ async def _maybe_fill_groups_form(page: Any, email: str) -> None:
         project_name = f"{name}-proj"
         await asyncio.sleep(1.0)
 
-    _debug("_maybe_fill_groups_form: gave up after 3 attempts")
+    # All 3 attempts failed — raise so caller doesn't proceed dengan namespace
+    # yang belum tercipta. Sebelumnya silent return → trial_claim fail dengan
+    # "Could not resolve namespace_id" yang misleading.
+    raise RetryableBatcherError(
+        ErrorCode.browser_unexpected_state,
+        f"Group creation failed after 3 attempts (last errors: {last_errs or 'none'}, url={page.url})",
+    )
 
 
 async def _wait_for_dashboard_or_project(page: Any, timeout_s: int = 45) -> None:
-    """After welcome, GitLab might create a starter project or land on the
-    Projects dashboard. Either is fine — we just need a logged-in URL with a
-    namespace_id we can read for trial activation."""
+    """After welcome+groups, GitLab routes to dashboard / project / group page.
+    Kita perlu memastikan minimal SATU group namespace milik user sudah ada
+    (trial endpoint REJECT user namespace — harus group).
+
+    PERUBAHAN: Sebelumnya cuma cek "URL bukan /users/sign_*" → bisa lewat
+    groups step (akun half-onboarded yang URL sudah di /-/profile dll).
+    Sekarang: tunggu URL non-signup DAN verify via API ada `kind=group`.
+
+    Raises RetryableBatcherError kalau timeout tanpa group terdeteksi.
+    """
     deadline = time.monotonic() + timeout_s
+    last_url = ""
+    last_check_at = 0.0
+    has_group_cached = False
     while time.monotonic() < deadline:
         try:
             url = page.url
-            # Any logged-in GitLab page works for our next steps.
-            if "gitlab.com" in url and "/users/sign_" not in url and "identity_verification" not in url:
-                return
         except Exception:
-            pass
+            url = ""
+        if url != last_url:
+            _debug(f"_wait_for_dashboard_or_project: url={url}")
+            last_url = url
+
+        on_logged_in = (
+            "gitlab.com" in url
+            and "/users/sign_" not in url
+            and "identity_verification" not in url
+            and "/users/confirmation" not in url
+        )
+        if on_logged_in:
+            # Verify group namespace exists. Cache positive result — kalau sudah
+            # punya group, tidak perlu cek ulang. Cek max tiap 3s untuk hemat.
+            now = time.monotonic()
+            if has_group_cached:
+                return
+            if now - last_check_at >= 3.0:
+                last_check_at = now
+                try:
+                    has_group = await page.evaluate(
+                        """async () => {
+                            try {
+                                const r = await fetch('/api/v4/namespaces?owned=true&per_page=50',
+                                    {credentials: 'include'});
+                                if (!r.ok) return false;
+                                const arr = await r.json();
+                                return Array.isArray(arr) && arr.some(n => n.kind === 'group');
+                            } catch (e) { return false; }
+                        }"""
+                    )
+                    if has_group:
+                        has_group_cached = True
+                        _debug("_wait_for_dashboard_or_project: group namespace verified")
+                        return
+                    else:
+                        _debug("_wait_for_dashboard_or_project: no group namespace yet, polling…")
+                except Exception as exc:
+                    _debug(f"_wait_for_dashboard_or_project: namespace API check failed: {exc}")
         await asyncio.sleep(1.0)
+
+    raise RetryableBatcherError(
+        ErrorCode.browser_unexpected_state,
+        f"No group namespace exists after onboarding (timeout {timeout_s}s, last url: {last_url})",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1688,42 +1949,70 @@ async def _wait_for_dashboard_or_project(page: Any, timeout_s: int = 45) -> None
 # ---------------------------------------------------------------------------
 
 async def _resolve_namespace_id(page: Any, fallback_path: str | None = None) -> int:
-    """Find the user's primary namespace_id by either:
-      (a) Reading the 'Start a Free Trial' link query param if present, or
-      (b) Hitting /api/v4/namespaces with the session cookie.
-    """
-    # (a) Look for trial CTA link.
-    try:
-        href = await page.locator(
-            'a[href*="/-/trials/new"][href*="namespace_id="]'
-        ).first.get_attribute("href", timeout=3000)
-        if href:
-            m = re.search(r"namespace_id=(\d+)", href)
-            if m:
-                return int(m.group(1))
-    except Exception:
-        pass
+    """Find the user's primary GROUP namespace_id by either:
+      (a) Reading the 'Start a Free Trial' link query param (banner only —
+          appears on dashboard/billing pages), or
+      (b) Hitting /api/v4/namespaces?owned=true via session cookie.
 
-    # (b) Fallback — fetch via the page's session.
-    try:
-        result = await page.evaluate(
-            """async () => {
-                const r = await fetch('/api/v4/namespaces?per_page=20', {credentials: 'include'});
-                if (!r.ok) return null;
-                const arr = await r.json();
-                // Prefer kind=group, then user namespace.
-                const group = arr.find(n => n.kind === 'group');
-                return group?.id ?? arr[0]?.id ?? null;
-            }"""
-        )
-        if isinstance(result, (int, float)) and result > 0:
-            return int(result)
-    except Exception:
-        pass
+    PERUBAHAN dari sebelumnya:
+    • STRICT — hanya return namespace `kind=group`. Sebelumnya ada fallback
+      ke `arr[0]?.id` yang bisa balikin user namespace → trial endpoint
+      reject (user namespace tidak eligible untuk trial Ultimate).
+    • RETRY — sampai 3x dengan delay 2s. Kadang setelah groups submit ada
+      eventual-consistency lag sebelum API return group baru.
+    • Filter `owned=true` supaya tidak ke-bias dengan group yang user cuma
+      member (bukan owner — trial perlu owner role).
+    """
+    last_err = "no attempt yet"
+    for attempt in range(3):
+        # (a) Look for trial CTA link (banner di dashboard/billing).
+        try:
+            href = await page.locator(
+                'a[href*="/-/trials/new"][href*="namespace_id="]'
+            ).first.get_attribute("href", timeout=2000)
+            if href:
+                m = re.search(r"namespace_id=(\d+)", href)
+                if m:
+                    nsid = int(m.group(1))
+                    _debug(f"_resolve_namespace_id: from CTA link = {nsid}")
+                    return nsid
+        except Exception as exc:
+            last_err = f"CTA link miss: {exc}"
+
+        # (b) API fetch — STRICT group-only.
+        try:
+            result = await page.evaluate(
+                """async () => {
+                    try {
+                        const r = await fetch('/api/v4/namespaces?owned=true&per_page=50',
+                            {credentials: 'include'});
+                        if (!r.ok) return {error: `status ${r.status}`};
+                        const arr = await r.json();
+                        if (!Array.isArray(arr)) return {error: 'non-array'};
+                        const group = arr.find(n => n.kind === 'group');
+                        if (group) return {id: group.id, path: group.full_path};
+                        // No group namespace yet. Return diagnostics for debug.
+                        return {error: 'no-group', kinds: arr.map(n => n.kind)};
+                    } catch (e) { return {error: String(e)}; }
+                }"""
+            )
+            if isinstance(result, dict) and isinstance(result.get("id"), (int, float)):
+                nsid = int(result["id"])
+                _debug(f"_resolve_namespace_id: from API = {nsid} (path={result.get('path')})")
+                return nsid
+            last_err = f"API returned: {result!r}"
+            _debug(f"_resolve_namespace_id[a{attempt}]: {last_err}")
+        except Exception as exc:
+            last_err = f"API call failed: {exc}"
+            _debug(f"_resolve_namespace_id[a{attempt}]: {last_err}")
+
+        # Wait before retry — eventual consistency setelah group creation
+        if attempt < 2:
+            await asyncio.sleep(2.0)
 
     raise RetryableBatcherError(
         ErrorCode.browser_unexpected_state,
-        "Could not resolve namespace_id for trial activation",
+        f"Could not resolve namespace_id for trial activation (last: {last_err})",
     )
 
 
@@ -2083,30 +2372,85 @@ class GitLabDuoProviderAdapter(ProviderAdapter):
     ) -> dict[str, str]:
         page = session["page"]
 
-        # Try skipping welcome form by navigating directly to dashboard.
-        # For some accounts (already-onboarded), this works. For brand-new
-        # accounts, GitLab redirects back to /users/sign_up/welcome — in that
-        # case we fall through to filling the form properly.
-        _progress("welcome_skip", "Trying to skip welcome form…")
+        # Welcome form WAJIB diisi untuk akun fresh — jangan coba skip.
+        # Sebelumnya kode probe `goto(/)` dulu lalu cek redirect, tapi ada race
+        # condition di mana page.url sempat resolve ke "/" sebentar sebelum
+        # server bounce balik ke /users/sign_up/welcome — akibatnya cek
+        # `if "/users/sign_up/welcome" in page.url` miss dan flow lompat ke
+        # trial_claim → gagal dengan "Could not resolve namespace_id".
+        #
+        # Solusi: navigate EKSPLISIT ke /users/sign_up/welcome dan biarkan
+        # _maybe_fill_welcome_form yang menentukan apakah ada form atau tidak
+        # (untuk akun yang sudah onboarded, GitLab akan redirect dari
+        # /welcome ke dashboard otomatis — fungsi tersebut detect lalu no-op).
+        _progress("welcome_goto", "Navigating to welcome form…")
         try:
-            await page.goto(f"{DEFAULT_BASE_URL}/", wait_until="domcontentloaded", timeout=30000)
+            await page.goto(
+                f"{DEFAULT_BASE_URL}/users/sign_up/welcome",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
             await asyncio.sleep(2.5)
-            _debug(f"after dashboard goto: {page.url}")
+            _debug(f"after welcome goto: {page.url}")
         except Exception as exc:
-            _debug(f"dashboard goto failed: {exc}")
+            _debug(f"welcome goto failed: {exc}")
 
-        # If we got bounced back to welcome, fill it. Mandatory for fresh accounts.
-        if "/users/sign_up/welcome" in page.url:
-            _progress("welcome_form", "Welcome form is mandatory, filling it…")
-            await _maybe_fill_welcome_form(page)
+        # Always run the fill helper. It detects the welcome URL itself and
+        # silently no-ops if the user is already onboarded (server redirected
+        # us to dashboard / projects). For fresh accounts it fills + submits.
+        _progress("welcome_form", "Filling welcome form…")
+        await _maybe_fill_welcome_form(page)
+
+        # Wait for post-welcome redirect to settle. Setelah submit welcome,
+        # server redirect bisa makan 5–10s — TANPA poll, cek `if /groups/new
+        # in page.url` di bawah akan MISS dan groups step ke-skip → namespace
+        # tidak terbentuk → trial_claim fail dengan "Could not resolve
+        # namespace_id". Poll 20s sampai URL stabil.
+        _progress("post_welcome_wait", "Waiting for post-welcome redirect…")
+        for i in range(20):
+            await asyncio.sleep(1.0)
+            try:
+                cur = page.url
+            except Exception:
+                continue
+            if "/users/sign_up/groups/new" in cur:
+                _debug(f"post-welcome: arrived at groups/new after {i+1}s")
+                break
+            if "/users/sign_up/welcome" not in cur and "/users/sign_up/" not in cur:
+                # Sudah lewat sign_up flow (redirect ke dashboard/project).
+                # Mungkin akun sudah punya namespace existing.
+                _debug(f"post-welcome: redirected past sign_up to {cur}")
+                break
+
+        # Defensive force-navigate: kalau masih nyangkut di sign_up tapi BUKAN
+        # di groups/new (mis. /users/sign_up/welcome karena submit kena rate
+        # limit), force ke /users/sign_up/groups/new. Server akan redirect ke
+        # dashboard kalau memang tidak butuh group form (akun lama).
+        if "/users/sign_up/" in page.url and "/users/sign_up/groups/new" not in page.url:
+            _debug(f"post-welcome: stuck on {page.url}, force-nav to groups/new")
+            try:
+                await page.goto(
+                    f"{DEFAULT_BASE_URL}/users/sign_up/groups/new",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                await asyncio.sleep(2.0)
+            except Exception as exc:
+                _debug(f"post-welcome force-nav failed: {exc}")
 
         # After welcome, GitLab routes fresh accounts to /users/sign_up/groups/new
-        # (group creation step). Fill it minimally and submit.
+        # (group creation step). Fill it minimally and submit. _maybe_fill_groups_form
+        # sekarang punya internal poll + raise on failure (sebelumnya silent).
         if "/users/sign_up/groups/new" in page.url:
             _progress("group_create", "Creating initial group…")
             await _maybe_fill_groups_form(page, account.identifier)
 
+        # _wait_for_dashboard_or_project sekarang VERIFY ada group namespace
+        # via /api/v4/namespaces (sebelumnya cuma cek URL). Kalau tidak ada
+        # group setelah onboarding, raise — supaya gagal cepat dengan pesan
+        # jelas alih-alih nanti error misleading di trial_claim.
         await _wait_for_dashboard_or_project(page)
+
         # Sanity: if we're STILL on a sign_up flow page after our handlers,
         # abort — downstream steps would fail on the wrong page.
         if "/users/sign_up/" in page.url:

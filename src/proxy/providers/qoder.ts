@@ -16,7 +16,11 @@ import * as path from "node:path";
 // Reverse-engineered from github.com/cubk1/qoder2api (Java) + qodercli bundle.
 // ============================================================================
 
-const COSY_VERSION = "0.1.43";
+// Updated to match qodercli 1.0.22 capture (api2.qoder.sh host, new headers,
+// new business object, top-level `system` field). The earlier api3 host was
+// the qoder2api reverse-engineered fallback that the server still served but
+// did NOT charge against the qmodel_latest free-quota bucket.
+const COSY_VERSION = "1.0.22";
 const APPCODE = "cosy";
 const SIG_SECRET = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="; // base64("war, war never changes")
 const JOB_TOKEN_URL = "https://center.qoder.sh/algo/api/v3/user/jobToken?Encode=1";
@@ -26,17 +30,25 @@ const QOTA_USAGE_URL = "https://openapi.qoder.sh/api/v2/quota/usage";
 // distinct from QOTA_USAGE_URL which reports the account-wide credit balance.
 const ACTIVITY_URL = "https://openapi.qoder.sh/algo/api/v2/activity";
 
+// Business descriptors sent in body.business and Cosy-Business-* headers.
+// CLI uses product=cli, type=agent. Required for the server to attribute
+// the request to the right billing/promo bucket.
+const BUSINESS_PRODUCT = "cli";
+const BUSINESS_TYPE = "agent";
+const BUSINESS_VERSION = "1.0.22"; // matches Cosy-Version
+const COSY_SCENE = "assistant";
+
 export function openApiHeaders(securityOauthToken: string): Record<string, string> {
   return {
     Accept: "application/json",
     Authorization: `Bearer ${securityOauthToken}`,
     "Cosy-ClientType": "5",
-    "Cosy-Version": "1.0.6",
-    "User-Agent": "qoder/1.0.6",
+    "Cosy-Version": COSY_VERSION,
+    "User-Agent": "qoder/" + COSY_VERSION,
   };
 }
 const CHAT_URL =
-  "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1";
+  "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1";
 
 // 1024-bit RSA pubkey extracted from qodercli bundle. Server uses this to decrypt
 // the per-session AES key. Rotation by Qoder will break all clients at once.
@@ -126,13 +138,15 @@ function buildSessionContext(identity: AuthIdentity): SessionContext {
 }
 
 function buildPayloadB64(info: string): string {
-  // Sorted keys (matches Java TreeMap)
+  // Insertion order matches qodercli 1.0.22 capture exactly:
+  // {"version","requestId","info","cosyVersion","ideVersion"}
+  // (NOT alphabetically sorted as the older qoder2api Java port did)
   const m = {
+    version: "v1",
+    requestId: crypto.randomUUID(),
+    info,
     cosyVersion: COSY_VERSION,
     ideVersion: "",
-    info,
-    requestId: crypto.randomUUID(),
-    version: "v1",
   };
   return Buffer.from(JSON.stringify(m), "utf8").toString("base64");
 }
@@ -162,12 +176,11 @@ interface QoderTokens {
 }
 
 function generateMachineIdentity() {
+  // Mirror qodercli 1.0.22 layout: machineToken == machineId (same UUID),
+  // machineType is the literal client type "5" (NOT a random hex blob).
   const machineId = crypto.randomUUID();
-  const machineToken = Buffer.from(
-    (crypto.randomUUID() + crypto.randomUUID()).slice(0, 50),
-    "ascii",
-  ).toString("base64url");
-  const machineType = crypto.randomUUID().replace(/-/g, "").slice(0, 18);
+  const machineToken = machineId;
+  const machineType = "5";
   return { machineId, machineToken, machineType };
 }
 
@@ -297,21 +310,35 @@ export async function bearerFetch(tokens: QoderTokens, opts: BearerCallOptions):
   const pathSig = pathSigFromUrl(opts.url);
   const sig = signBearerRequest(payloadB64, session.cosyKey, date, bodyEncoded, pathSig);
 
+  // Header layout matches qodercli 1.0.22 capture. Notable differences vs the
+  // older qoder2api port:
+  //   - cosy-data-policy is lowercase "agree" (was "AGREE")
+  //   - cosy-machinetype is the literal string "5" (client type indicator),
+  //     NOT a random UUID-derived value
+  //   - cosy-machinetoken equals cosy-machineid (same UUID)
+  //   - cosy-business-product / cosy-business-type / cosy-scene are NEW —
+  //     the server uses these to attribute the request to a billing bucket
+  //   - the fake link-local cosy-clientip is gone; CLI doesn't send it.
+  //   - user-agent is Go-http-client/2.0 (Go binary, unchanged)
+  const machineId = tokens.machineId;
+  const machineToken = tokens.machineToken || machineId; // CLI: token == id
   const headers: Record<string, string> = {
-    "cosy-data-policy": "AGREE",
-    "cosy-machinetype": tokens.machineType,
+    "cosy-data-policy": "agree",
+    "cosy-machinetype": "5",
     "cosy-clienttype": "5",
     "cosy-date": date,
     "cosy-user": tokens.userId || "",
     "cosy-key": session.cosyKey,
     "cache-control": "no-cache",
+    "cosy-business-product": BUSINESS_PRODUCT,
+    "cosy-business-type": BUSINESS_TYPE,
+    "cosy-scene": COSY_SCENE,
     accept: opts.stream ? "text/event-stream" : "application/json",
-    "cosy-clientip": "169.254.198.161",
     authorization: `Bearer COSY.${payloadB64}.${sig}`,
     "accept-encoding": "identity",
     "cosy-version": COSY_VERSION,
-    "cosy-machineid": tokens.machineId,
-    "cosy-machinetoken": tokens.machineToken,
+    "cosy-machineid": machineId,
+    "cosy-machinetoken": machineToken,
     "login-version": "v2",
     "user-agent": "Go-http-client/2.0",
     ...(opts.extraHeaders || {}),
@@ -346,7 +373,15 @@ const QODER_MODELS: QoderModelDef[] = [
   { id: "qd-Performance",       upstream: "performance",   display_name: "Performance",       max_input_tokens: 272000, is_vl: true,  is_reasoning: false, price_factor: 1.1 },
   { id: "qd-Efficient",         upstream: "efficient",     display_name: "Efficient",         max_input_tokens: 180000, is_vl: true,  is_reasoning: false, price_factor: 0.3 },
   { id: "qd-Lite",              upstream: "lite",          display_name: "Lite",              max_input_tokens: 180000, is_vl: false, is_reasoning: false, price_factor: 0 },
-  { id: "qd-Qwen3.7-Max",       upstream: "qmodel_latest", display_name: "Qwen3.7-Max",       max_input_tokens: 180000, is_vl: true,  is_reasoning: false, price_factor: 0.2 },
+  // Qwen3.7-Max accepts up to 1M-token context windows. Qodercli's default
+  // `max_input_tokens: 180000` is just the lowest tier the picker offers —
+  // the server itself accepts much larger windows (the CLI lets users opt
+  // in to 200k / 400k / 1M from settings.json `model.contextWindow`).
+  // Advertise the full 1M here so downstream clients (Cline, Roo, Claude
+  // Code) don't trim history before we even reach Qoder. The server will
+  // reject requests it actually can't serve, which is the right place to
+  // enforce the real ceiling.
+  { id: "qd-Qwen3.7-Max",       upstream: "qmodel_latest", display_name: "Qwen3.7-Max",       max_input_tokens: 1000000, is_vl: true,  is_reasoning: false, price_factor: 0.2 },
   { id: "qd-Qwen3.6-Plus",      upstream: "qmodel",        display_name: "Qwen3.6-Plus",      max_input_tokens: 180000, is_vl: true,  is_reasoning: false, price_factor: 0.2 },
   { id: "qd-DeepSeek-V4-Pro",   upstream: "dmodel",        display_name: "DeepSeek-V4-Pro",   max_input_tokens: 180000, is_vl: true,  is_reasoning: true,  price_factor: 0.5 },
   { id: "qd-DeepSeek-V4-Flash", upstream: "dfmodel",       display_name: "DeepSeek-V4-Flash", max_input_tokens: 180000, is_vl: true,  is_reasoning: true,  price_factor: 0.1 },
@@ -674,7 +709,11 @@ function buildChatBody(request: ChatCompletionRequest, tokens: QoderTokens): any
   body.request_set_id = crypto.randomUUID();
   body.session_id = sessionId;
   body.stream = true;
-  body.aliyun_user_type = tokens.userType || "personal_standard";
+  // Qodercli 1.0.22 sends "" here (NOT "personal_standard"). Mirror that
+  // exactly — server uses this together with userType in the JWT to decide
+  // billing routing, and a non-empty value here appears to send the request
+  // down a path that bypasses the qmodel_latest free-quota bucket.
+  body.aliyun_user_type = "";
 
   if (!body.model_config) body.model_config = {};
   body.model_config.key = cfg.upstream;
@@ -685,10 +724,19 @@ function buildChatBody(request: ChatCompletionRequest, tokens: QoderTokens): any
   body.model_config.format = body.model_config.format || "openai";
   body.model_config.source = body.model_config.source || "system";
 
-  if (!body.business) body.business = {};
-  body.business.id = crypto.randomUUID();
-  body.business.begin_at = Date.now();
-  body.business.name = prompt.slice(0, 30);
+  // Business object — qodercli 1.0.22 shape. Server reads product/type/stage
+  // to attribute the request to the right billing bucket. Without these, the
+  // request is served but does NOT charge against the qmodel_latest free
+  // quota.
+  body.business = {
+    product: BUSINESS_PRODUCT,
+    version: BUSINESS_VERSION,
+    type: BUSINESS_TYPE,
+    id: crypto.randomUUID(),
+    name: prompt.slice(0, 30),
+    begin_at: Date.now(),
+    stage: "start",
+  };
 
   if (!body.chat_context) body.chat_context = {};
   body.chat_context.text = { type: "text", text: prompt };
@@ -712,6 +760,14 @@ function buildChatBody(request: ChatCompletionRequest, tokens: QoderTokens): any
   }
 
   body.messages = buildQoderMessages(request, body.messages, hasIncomingTools);
+
+  // Mirror messages[0] system prompt up to top-level body.system. Qodercli
+  // 1.0.22 sends BOTH locations identically — server reads top-level `system`
+  // for billing/routing decisions while messages[0] feeds the model.
+  const sysMsg = body.messages.find((m: any) => m?.role === "system");
+  if (sysMsg && typeof sysMsg.content === "string") {
+    body.system = sysMsg.content;
+  }
 
   if (request.max_tokens && body.parameters) {
     body.parameters.max_tokens = request.max_tokens;
@@ -846,6 +902,14 @@ export class QoderProvider extends BaseProvider {
     try {
       const t = typeof account.tokens === "string" ? JSON.parse(account.tokens) : account.tokens;
       if (!t || typeof t !== "object" || !t.personalToken) return null;
+      // Backfill missing machine identity. Older imports (pre 1.0.22 fix)
+      // wrote tokens without machineId/Token/Type. The cosy-machine* headers
+      // depend on these — without them the request is served but appears to
+      // skip the qmodel_latest free-quota bucket. Generate stable values now
+      // so all subsequent requests carry valid headers.
+      if (!t.machineId) t.machineId = crypto.randomUUID();
+      if (!t.machineToken) t.machineToken = t.machineId; // CLI: token == id
+      if (!t.machineType) t.machineType = "5"; // CLI literal client type
       return t as QoderTokens;
     } catch {
       return null;
@@ -985,7 +1049,17 @@ export class QoderProvider extends BaseProvider {
     const body = buildChatBody(request, tokens);
     let resp: Response;
     try {
-      resp = await bearerFetch(tokens, { url: CHAT_URL, body, stream: true });
+      const cfg = MODEL_CONFIGS[request.model] || QODER_MODELS[0]!;
+      const modelSource = body?.model_config?.source || "system";
+      resp = await bearerFetch(tokens, {
+        url: CHAT_URL,
+        body,
+        stream: true,
+        extraHeaders: {
+          "x-model-key": cfg.upstream,
+          "x-model-source": modelSource,
+        },
+      });
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     }

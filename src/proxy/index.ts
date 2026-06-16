@@ -359,13 +359,16 @@ function wrapStreamWithUsageFinalizer(
           return;
         }
 
-        // Qoder: NO local decrement. Counters are mirrored from Qoder by
-        // warmup. Other providers keep their existing decrement.
-        const quotaAfter = isQoder
-          ? context.quotaBefore
-          : context.quotaBefore > 0
-            ? await pool.decrementQuota(context.accountId, creditsUsed)
-            : 0;
+        // Decrement at stream finalization. Qoder free-bucket (qmodel_latest)
+        // charges 1 request per call; other Qoder buckets stay unchanged
+        // (no local counter — server is sole truth). Non-Qoder providers
+        // keep existing token-based decrement.
+        let quotaAfter = context.quotaBefore;
+        if (isQoder && context.useFreeCounter && context.quotaBefore > 0) {
+          quotaAfter = await pool.decrementFreeQuota(context.accountId, 1);
+        } else if (!isQoder && context.quotaBefore > 0) {
+          quotaAfter = await pool.decrementQuota(context.accountId, creditsUsed);
+        }
 
         if (context.logId) {
           await db
@@ -480,9 +483,12 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
     result.creditSource
   );
 
-    // Qoder: NO local decrement. Qoder server is the source of truth for
-    // quota — we mirror it via warmup, not by local counting. Tracking-only
-    // values for the request log are read from current DB state at start.
+    // Qoder: server IS the source of truth, but we now also decrement the
+    // local `freeRemaining` counter optimistically for free-bucket models
+    // (qmodel_latest). This gives the dashboard real-time numbers instead of
+    // waiting for the next warmup mirror. The warmup runner still overrides
+    // both columns from /activity each cycle, so any local drift is
+    // self-correcting.
     const isQoder = provider === "qoder";
     const qoderProvider = providers["qoder"] as { isFreeModel?: (m: string) => boolean } | undefined;
     const useFreeCounter = isQoder && qoderProvider?.isFreeModel?.(body.model) === true;
@@ -493,12 +499,17 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
         : Number(account.quotaRemaining || 0)
       : Number(account.quotaRemaining || 0);
 
-    // Non-Qoder: keep the existing decrement behavior unchanged.
-    const quotaAfter = isStream || isQoder
-      ? quotaBefore
-      : quotaBefore > 0
-        ? await pool.decrementQuota(account.id, creditsUsed)
-        : 0;
+    // For non-stream paths, decrement immediately. Stream paths and the
+    // Qoder paid bucket (where we don't track usage locally) stay unchanged.
+    let quotaAfter = quotaBefore;
+    if (!isStream) {
+      if (isQoder && useFreeCounter && quotaBefore > 0) {
+        // Qoder /activity bucket charges 1 request per call regardless of token count.
+        quotaAfter = await pool.decrementFreeQuota(account.id, 1);
+      } else if (!isQoder && quotaBefore > 0) {
+        quotaAfter = await pool.decrementQuota(account.id, creditsUsed);
+      }
+    }
 
   const logEntry = {
     accountId: account.id,

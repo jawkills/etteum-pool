@@ -42,7 +42,7 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
 
 interface Account {
   id: number;
@@ -53,7 +53,7 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"];
+const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo", "youmind"];
 
 function labelProvider(provider: string) {
   if (provider === "kiro-pro") return "Kiro Pro";
@@ -61,6 +61,7 @@ function labelProvider(provider: string) {
   if (provider === "codex") return "Codex";
   if (provider === "qoder") return "Qoder";
   if (provider === "gitlab-duo") return "GitLab Duo";
+  if (provider === "youmind") return "YouMind";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -93,6 +94,8 @@ export default function Accounts() {
   const [gitlabPat, setGitlabPat] = useState("");
   const [gitlabLabel, setGitlabLabel] = useState("");
   const [gitlabBusy, setGitlabBusy] = useState(false);
+  const [youmindApiKey, setYoumindApiKey] = useState("");
+  const [youmindBusy, setYoumindBusy] = useState(false);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
   const [loginPendingConcurrency, setLoginPendingConcurrency] = useState(2);
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
@@ -376,6 +379,33 @@ export default function Accounts() {
     finally { setGitlabBusy(false); }
   }
 
+  async function handleYouMindApiKeyLogin() {
+    const apiKey = youmindApiKey.trim();
+    if (!apiKey) { showError(new Error("Paste YouMind API key")); return; }
+    if (!apiKey.startsWith("sk-ym-")) {
+      showError(new Error("YouMind API key must start with sk-ym-"));
+      return;
+    }
+    setYoumindBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "youmind",
+          apiKey,
+        }),
+      });
+      const labelText = res?.email || "account";
+      showSuccess(res?.updated
+        ? `YouMind key updated (${labelText})`
+        : `YouMind ${labelText} added successfully`);
+      setYoumindApiKey("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setYoumindBusy(false); }
+  }
+
   async function handleBulkImport() {
     if (!addDialogProvider || !bulkText.trim()) { showError(new Error("Paste email|password lines")); return; }
     try {
@@ -558,6 +588,9 @@ export default function Accounts() {
       setAddMode("pat");
     }
     if (provider === "gitlab-duo") {
+      setAddMode("pat");
+    }
+    if (provider === "youmind") {
       setAddMode("pat");
     }
     setAddDialogProvider(provider);
@@ -1279,6 +1312,8 @@ export default function Accounts() {
                 ? "Add via PAT, bulk Google accounts, or single account."
                 : addDialogProvider === "gitlab-duo"
                 ? "Add via Personal Access Token, single Gmail (bot login), or bulk email|password."
+                : addDialogProvider === "youmind"
+                ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
           </DialogHeader>
@@ -1323,6 +1358,12 @@ export default function Accounts() {
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >Bulk (Email|Pass)</button>
             </div>
+          ) : addDialogProvider === "youmind" ? (
+            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+              <button onClick={() => setAddMode("pat")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >API Key (sk-ym-...)</button>
+            </div>
           ) : (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
               <button onClick={() => setAddMode("bulk")}
@@ -1350,6 +1391,33 @@ export default function Accounts() {
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)}>Cancel</Button>
                 <Button onClick={handleCookieLogin}>Add Account</Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "pat" && addDialogProvider === "youmind" && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-[var(--foreground)]">YouMind API Key</label>
+                <textarea
+                  value={youmindApiKey}
+                  onChange={(e) => setYoumindApiKey(e.target.value)}
+                  className="mt-1 w-full h-32 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  placeholder="sk-ym-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  disabled={youmindBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Paste your YouMind API key from{" "}
+                  <a href="https://youmind.com" target="_blank" rel="noreferrer" className="underline">youmind.com</a>{" "}
+                  Settings → API Keys. Server validates via <code>POST /openapi/v1/listBoards</code> and stores the key encrypted.
+                  Available models: <code>ym-claude-opus-4.6/4.7/4.8</code>, <code>ym-claude-sonnet-4.6</code>, <code>ym-gpt-5.5</code>, <code>ym-gpt-4o</code>.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={youmindBusy}>Cancel</Button>
+                <Button onClick={handleYouMindApiKeyLogin} disabled={youmindBusy}>
+                  {youmindBusy ? "Validating..." : "Add Account"}
+                </Button>
               </div>
             </div>
           )}
