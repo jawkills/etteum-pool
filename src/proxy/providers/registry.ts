@@ -1,6 +1,7 @@
 import type { BaseProvider, ModelInfo } from "./base";
 import { KiroProvider } from "./kiro";
 import { CodeBuddyProvider } from "./codebuddy";
+import { CodeBuddyChinaProvider } from "./codebuddy-china";
 import { CanvaProvider } from "./canva";
 import { CodexProvider } from "./codex";
 import { QoderProvider } from "./qoder";
@@ -26,6 +27,7 @@ import { YouMindProvider } from "./youmind";
 const kiro = new KiroProvider({ variant: "standard" });
 const kiroPro = new KiroProvider({ variant: "pro" });
 const codebuddy = new CodeBuddyProvider();
+const codebuddyChina = new CodeBuddyChinaProvider();
 const canva = new CanvaProvider();
 const codex = new CodexProvider();
 const qoder = new QoderProvider();
@@ -41,12 +43,13 @@ const youmind = new YouMindProvider();
 // overlap with any other provider, so position is not load-bearing. youmind
 // owns the `ym-*` prefix exclusively — also position-independent, but slotted
 // alongside the other prefix-based providers for readability.
-const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, byok, codebuddy, kiro] as const;
+const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, byok, codebuddyChina, codebuddy, kiro] as const;
 
 export const providers = {
   kiro,
   "kiro-pro": kiroPro,
   codebuddy,
+  "codebuddy-china": codebuddyChina,
   canva,
   codex,
   qoder,

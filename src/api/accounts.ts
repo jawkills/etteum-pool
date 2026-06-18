@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db } from "../db/index";
-import { accounts, requestLogs, vccCards, vccTransactions } from "../db/schema";
+import { accounts, requestLogs, vccCards, vccTransactions, settings } from "../db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { encrypt, decrypt } from "../utils/crypto";
 import { broadcast } from "../ws/index";
@@ -13,6 +13,128 @@ import { activateQoderPat } from "../proxy/providers/qoder";
 import { activateYouMindKey } from "../proxy/providers/youmind";
 
 export const accountsRouter = new Hono();
+
+type ByokKeyInput = {
+  id?: number;
+  label?: string;
+  key?: string;
+  api_key?: string;
+  enabled?: boolean;
+  weight?: number;
+  priority?: number;
+};
+
+type ByokTokensShape = {
+  base_url?: string;
+  api_key?: string;
+  format?: "openai" | "anthropic" | "auto";
+  models?: string[];
+  model_prefix?: string;
+  headers?: Record<string, string>;
+  key_label?: string;
+  weight?: number;
+  priority?: number;
+  load_balancing_method?: "round_robin" | "sequential" | "least_inflight";
+};
+
+const BYOK_PREFIX_RE = /^[a-z0-9-]+$/;
+const BYOK_KEY_LABEL_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+
+function parseByokTokens(raw: unknown): ByokTokensShape {
+  if (!raw) return {};
+  try {
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as ByokTokensShape;
+  } catch {
+    return {};
+  }
+}
+
+function getByokPrefix(account: { email: string; tokens: unknown }): string {
+  const tokens = parseByokTokens(account.tokens);
+  return tokens.model_prefix || account.email.split("#")[0] || account.email;
+}
+
+function getByokKeyLabel(account: { email: string; tokens: unknown }): string {
+  const tokens = parseByokTokens(account.tokens);
+  if (tokens.key_label) return tokens.key_label;
+  const marker = account.email.indexOf("#");
+  return marker >= 0 ? account.email.slice(marker + 1) || "default" : "default";
+}
+
+function normalizeModels(models: unknown): string[] {
+  if (!Array.isArray(models)) return [];
+  return Array.from(new Set(models.map((m) => String(m).trim()).filter(Boolean)));
+}
+
+function normalizeByokKeys(apiKeys: unknown, legacyApiKey?: string): Array<{ label: string; key: string; weight?: number; priority?: number }> {
+  const rawKeys = Array.isArray(apiKeys)
+    ? apiKeys as ByokKeyInput[]
+    : legacyApiKey
+      ? [{ label: "default", key: legacyApiKey }]
+      : [];
+
+  const normalized: Array<{ label: string; key: string; weight?: number; priority?: number }> = [];
+  const seen = new Set<string>();
+  for (const [index, item] of rawKeys.entries()) {
+    const label = String(item.label || `key-${index + 1}`).trim().toLowerCase();
+    const key = String(item.key || item.api_key || "").trim();
+    if (!key) continue;
+    if (!BYOK_KEY_LABEL_RE.test(label)) {
+      throw new Error("key label must start with lowercase alphanumeric and contain only lowercase letters, numbers, hyphen, or underscore");
+    }
+    if (seen.has(label)) throw new Error(`duplicate BYOK key label: ${label}`);
+    seen.add(label);
+    normalized.push({
+      label,
+      key,
+      weight: Number.isFinite(Number(item.weight)) ? Number(item.weight) : undefined,
+      priority: Number.isFinite(Number(item.priority)) ? Number(item.priority) : index,
+    });
+  }
+  return normalized;
+}
+
+function buildByokEmail(prefix: string, keyLabel: string): string {
+  return `${prefix}#${keyLabel}`;
+}
+
+function byokLbSettingKey(prefix: string): string {
+  return `byok_${prefix}_lb_method`;
+}
+
+function normalizeByokLbMethod(value: unknown): "round_robin" | "sequential" | "least_inflight" {
+  return value === "sequential" || value === "least_inflight" ? value : "round_robin";
+}
+
+async function setByokLbMethod(prefix: string, method: string) {
+  const key = byokLbSettingKey(prefix);
+  const value = normalizeByokLbMethod(method);
+  const existing = await db.select().from(settings).where(eq(settings.key, key));
+  if (existing.length > 0) {
+    await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, key));
+  } else {
+    await db.insert(settings).values({ key, value });
+  }
+  pool.invalidateLoadBalancingCache();
+}
+
+async function getByokLbMethods(prefixes: string[]): Promise<Map<string, string>> {
+  const wanted = new Set(prefixes.map(byokLbSettingKey));
+  const rows = await db.select().from(settings);
+  const result = new Map<string, string>();
+  for (const row of rows) {
+    if (!wanted.has(row.key) || !row.value) continue;
+    const prefix = row.key.replace(/^byok_/, "").replace(/_lb_method$/, "");
+    result.set(prefix, normalizeByokLbMethod(row.value));
+  }
+  return result;
+}
+
+async function refreshByokRuntime() {
+  pool.invalidate("byok" as ProviderName);
+  const { refreshByokModels } = await import("../proxy/providers/registry");
+  await refreshByokModels();
+}
 
 /**
  * GET /api/accounts/warmup-queue - Get warmup progress per provider
@@ -43,77 +165,88 @@ accountsRouter.get("/", async (c) => {
  */
 
 /**
- * POST /api/accounts/byok - Create BYOK provider
+ * POST /api/accounts/byok - Create BYOK provider group with one or more API keys.
+ * Backward compatible: accepts either `api_key` or `api_keys[]`.
  */
 accountsRouter.post("/byok", async (c) => {
   const body = await c.req.json<{
     label: string;
     base_url: string;
-    api_key: string;
+    api_key?: string;
+    api_keys?: ByokKeyInput[];
     format?: "openai" | "anthropic" | "auto";
     models: string[];
     headers?: Record<string, string>;
+    load_balancing_method?: "round_robin" | "sequential" | "least_inflight";
   }>();
 
-  if (!body.label || !body.base_url || !body.api_key || !body.models || body.models.length === 0) {
-    return c.json({ error: "label, base_url, api_key, and models[] are required" }, 400);
-  }
+  const label = String(body.label || "").trim().toLowerCase();
+  const baseUrl = String(body.base_url || "").trim().replace(/\/$/, "");
+  const models = normalizeModels(body.models);
 
-  // Validate label format (lowercase alphanumeric + hyphens)
-  if (!/^[a-z0-9-]+$/.test(body.label)) {
+  if (!label || !baseUrl || models.length === 0) {
+    return c.json({ error: "label, base_url, and models[] are required" }, 400);
+  }
+  if (!BYOK_PREFIX_RE.test(label)) {
     return c.json({ error: "label must be lowercase alphanumeric with hyphens only" }, 400);
   }
 
-  // Check uniqueness
-  const existing = await db.select().from(accounts)
-    .where(eq(accounts.email, body.label))
-    .then((rows) => rows.find((r) => r.provider === "byok"));
+  let keyInputs: Array<{ label: string; key: string; weight?: number; priority?: number }>;
+  try {
+    keyInputs = normalizeByokKeys(body.api_keys, body.api_key);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+  }
+  if (keyInputs.length === 0) {
+    return c.json({ error: "At least one API key is required" }, 400);
+  }
 
-  if (existing) {
+  const existingByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  if (existingByok.some((acc) => getByokPrefix(acc) === label)) {
     return c.json({ error: "BYOK provider with this label already exists" }, 409);
   }
 
-  // Encrypt API key
-  const encryptedKey = encrypt(body.api_key);
-
-  // Build tokens JSON
-  const tokens = {
-    base_url: body.base_url,
-    format: body.format || "auto",
-    models: body.models,
-    model_prefix: body.label,
-    headers: body.headers || {},
-  };
-
   try {
-    const result = await db.insert(accounts).values({
-      provider: "byok",
-      email: body.label,
-      password: encryptedKey,
-      status: "active",
-      enabled: true,
-      tokens: tokens,
-      quotaLimit: -1,
-      quotaRemaining: -1,
-    }).returning();
+    const createdRows = [];
+    for (const [index, keyInput] of keyInputs.entries()) {
+      const tokens: ByokTokensShape = {
+        base_url: baseUrl,
+        format: body.format || "auto",
+        models,
+        model_prefix: label,
+        headers: body.headers || {},
+        key_label: keyInput.label,
+        weight: keyInput.weight,
+        priority: keyInput.priority ?? index,
+        load_balancing_method: normalizeByokLbMethod(body.load_balancing_method),
+      };
 
-    const created = result[0]!;
-    pool.invalidate("byok" as ProviderName);
+      const result = await db.insert(accounts).values({
+        provider: "byok",
+        email: buildByokEmail(label, keyInput.label),
+        password: encrypt(keyInput.key),
+        status: "active",
+        enabled: true,
+        tokens,
+        quotaLimit: -1,
+        quotaRemaining: -1,
+      }).returning();
+      if (result[0]) createdRows.push(result[0]);
+    }
 
+    await setByokLbMethod(label, normalizeByokLbMethod(body.load_balancing_method));
+    await refreshByokRuntime();
     broadcast({
       type: "byok_created",
-      data: { id: created.id, label: body.label },
+      data: { id: createdRows[0]?.id, label, keyCount: createdRows.length },
     });
-
-    // Refresh BYOK model cache
-    const { refreshByokModels } = await import("../proxy/providers/registry");
-    await refreshByokModels();
 
     return c.json({
       success: true,
-      id: created.id,
-      label: body.label,
-      models: body.models.map((m) => `${body.label}-${m}`),
+      id: createdRows[0]?.id,
+      label,
+      key_count: createdRows.length,
+      models: models.map((m) => `${label}-${m}`),
     }, 201);
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
@@ -121,44 +254,139 @@ accountsRouter.post("/byok", async (c) => {
 });
 
 /**
- * GET /api/accounts/byok - List all BYOK providers
+ * GET /api/accounts/byok - List BYOK provider groups with masked key metadata.
  */
 accountsRouter.get("/byok", async (c) => {
   const byokAccounts = await db.select().from(accounts)
     .where(eq(accounts.provider, "byok"));
 
-  const providers = byokAccounts.map((acc) => {
-    const tokens = typeof acc.tokens === "string"
-      ? JSON.parse(acc.tokens)
-      : acc.tokens;
+  const lbMethods = await getByokLbMethods(Array.from(new Set(byokAccounts.map((acc) => getByokPrefix(acc)))));
 
-    return {
+  const groups = new Map<string, {
+    id: number;
+    label: string;
+    base_url: string;
+    format: "openai" | "anthropic" | "auto";
+    models: string[];
+    model_prefix: string;
+    headers?: Record<string, string>;
+    status: string;
+    enabled: boolean;
+    available_models: string[];
+    key_count: number;
+    active_key_count: number;
+    load_balancing_method: string;
+    keys: Array<{
+      id: number;
+      label: string;
+      status: string;
+      enabled: boolean;
+      weight?: number;
+      priority?: number;
+      lastUsedAt?: Date | null;
+      errorMessage?: string | null;
+    }>;
+  }>();
+
+  for (const acc of byokAccounts) {
+    const tokens = parseByokTokens(acc.tokens);
+    const prefix = tokens.model_prefix || getByokPrefix(acc);
+    const keyLabel = getByokKeyLabel(acc);
+    const models = normalizeModels(tokens.models || []);
+    const existing = groups.get(prefix);
+
+    if (!existing) {
+      groups.set(prefix, {
+        id: acc.id,
+        label: prefix,
+        base_url: tokens.base_url || "",
+        format: tokens.format || "auto",
+        models,
+        model_prefix: prefix,
+        headers: tokens.headers || {},
+        status: acc.status,
+        enabled: Boolean(acc.enabled),
+        available_models: models.map((m) => `${prefix}-${m}`),
+        key_count: 0,
+        active_key_count: 0,
+        load_balancing_method: lbMethods.get(prefix) || tokens.load_balancing_method || "round_robin",
+        keys: [],
+      });
+    } else {
+      const modelSet = new Set(existing.models);
+      for (const model of models) modelSet.add(model);
+      existing.models = Array.from(modelSet);
+      existing.available_models = existing.models.map((m) => `${prefix}-${m}`);
+      existing.enabled = existing.enabled || Boolean(acc.enabled);
+      existing.status = existing.status === "active" || acc.status !== "active" ? existing.status : "active";
+    }
+
+    const group = groups.get(prefix)!;
+    group.key_count += 1;
+    if (acc.enabled && acc.status === "active") group.active_key_count += 1;
+    group.keys.push({
       id: acc.id,
-      label: acc.email,
-      base_url: tokens?.base_url || "",
-      format: tokens?.format || "auto",
-      models: tokens?.models || [],
-      model_prefix: tokens?.model_prefix || acc.email,
+      label: keyLabel,
       status: acc.status,
-      enabled: acc.enabled,
-      available_models: (tokens?.models || []).map((m: string) => `${tokens?.model_prefix || acc.email}-${m}`),
-    };
-  });
+      enabled: Boolean(acc.enabled),
+      weight: tokens.weight,
+      priority: tokens.priority,
+      lastUsedAt: acc.lastUsedAt,
+      errorMessage: acc.errorMessage,
+    });
+  }
+
+  const providers = Array.from(groups.values()).map((group) => ({
+    ...group,
+    keys: group.keys.sort((a, b) => (Number(a.priority ?? 9999) - Number(b.priority ?? 9999)) || a.id - b.id),
+  })).sort((a, b) => a.label.localeCompare(b.label));
 
   return c.json({ providers, total: providers.length });
 });
 
 /**
- * PATCH /api/accounts/byok/:id - Update BYOK provider
+ * POST /api/accounts/byok/:id/reveal - Reveal a stored BYOK key secret.
+ *
+ * The list endpoint intentionally keeps secrets masked. This endpoint is called
+ * only on an explicit eye-icon action from the authenticated dashboard so the
+ * secret is not sent with normal page loads or websocket refreshes.
+ */
+accountsRouter.post("/byok/:id/reveal", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) return c.json({ error: "Invalid BYOK key id" }, 400);
+
+  const account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
+  if (!account || account.provider !== "byok") {
+    return c.json({ error: "BYOK key not found" }, 404);
+  }
+
+  try {
+    return c.json({
+      success: true,
+      id: account.id,
+      label: getByokKeyLabel(account),
+      key: decrypt(account.password),
+    });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to decrypt BYOK key" }, 500);
+  }
+});
+
+/**
+ * PATCH /api/accounts/byok/:id - Update a BYOK provider group.
+ * If `api_keys` is provided it becomes the desired key set: existing keys can be
+ * referenced by id/label and omitted keys are deleted from the group.
  */
 accountsRouter.patch("/byok/:id", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json<{
     base_url?: string;
     api_key?: string;
+    api_keys?: ByokKeyInput[];
     format?: "openai" | "anthropic" | "auto";
     models?: string[];
     headers?: Record<string, string>;
+    load_balancing_method?: "round_robin" | "sequential" | "least_inflight";
   }>();
 
   const account = await db.select().from(accounts)
@@ -169,77 +397,143 @@ accountsRouter.patch("/byok/:id", async (c) => {
     return c.json({ error: "BYOK provider not found" }, 404);
   }
 
-  const tokens = typeof account.tokens === "string"
-    ? JSON.parse(account.tokens)
-    : account.tokens || {};
+  const prefix = getByokPrefix(account);
+  const allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  const groupAccounts = allByok.filter((acc) => getByokPrefix(acc) === prefix);
+  const currentTokens = parseByokTokens(account.tokens);
+  const nextBaseUrl = body.base_url?.trim().replace(/\/$/, "") || currentTokens.base_url || "";
+  const nextFormat = body.format || currentTokens.format || "auto";
+  const nextModels = body.models ? normalizeModels(body.models) : normalizeModels(currentTokens.models || []);
+  const nextHeaders = body.headers ?? currentTokens.headers ?? {};
 
-  // Update fields
-  if (body.base_url) tokens.base_url = body.base_url;
-  if (body.format) tokens.format = body.format;
-  if (body.models) tokens.models = body.models;
-  if (body.headers) tokens.headers = body.headers;
-
-  const updateData: Record<string, unknown> = {
-    tokens: tokens,
-    updatedAt: new Date(),
-  };
-
-  if (body.api_key) {
-    updateData.password = encrypt(body.api_key);
+  if (!nextBaseUrl || nextModels.length === 0) {
+    return c.json({ error: "base_url and at least one model are required" }, 400);
   }
 
-  await db.update(accounts)
-    .set(updateData)
-    .where(eq(accounts.id, id));
+  try {
+    const keyPayloadProvided = Array.isArray(body.api_keys);
+    const desiredKeys = keyPayloadProvided ? (body.api_keys || []) : [];
+    const touchedIds = new Set<number>();
 
-  pool.invalidate("byok" as ProviderName);
+    if (keyPayloadProvided) {
+      const seenLabels = new Set<string>();
+      for (const [index, keyInput] of desiredKeys.entries()) {
+        const keyLabel = String(keyInput.label || `key-${index + 1}`).trim().toLowerCase();
+        const keySecret = String(keyInput.key || keyInput.api_key || "").trim();
+        if (!BYOK_KEY_LABEL_RE.test(keyLabel)) {
+          return c.json({ error: "key label must start with lowercase alphanumeric and contain only lowercase letters, numbers, hyphen, or underscore" }, 400);
+        }
+        if (seenLabels.has(keyLabel)) return c.json({ error: `duplicate BYOK key label: ${keyLabel}` }, 400);
+        seenLabels.add(keyLabel);
 
-  broadcast({
-    type: "byok_updated",
-    data: { id },
-  });
+        const existing = groupAccounts.find((acc) =>
+          (keyInput.id && acc.id === keyInput.id) || getByokKeyLabel(acc) === keyLabel
+        );
+        const tokens: ByokTokensShape = {
+          ...parseByokTokens(existing?.tokens),
+          base_url: nextBaseUrl,
+          format: nextFormat,
+          models: nextModels,
+          model_prefix: prefix,
+          headers: nextHeaders,
+          key_label: keyLabel,
+          weight: Number.isFinite(Number(keyInput.weight)) ? Number(keyInput.weight) : undefined,
+          priority: Number.isFinite(Number(keyInput.priority)) ? Number(keyInput.priority) : index,
+          load_balancing_method: normalizeByokLbMethod(body.load_balancing_method || currentTokens.load_balancing_method),
+        };
 
-  // Refresh BYOK model cache
-  const { refreshByokModels } = await import("../proxy/providers/registry");
-  await refreshByokModels();
+        if (existing) {
+          const updateData: Record<string, unknown> = {
+            email: buildByokEmail(prefix, keyLabel),
+            tokens,
+            enabled: typeof keyInput.enabled === "boolean" ? keyInput.enabled : existing.enabled,
+            updatedAt: new Date(),
+          };
+          if (keySecret) updateData.password = encrypt(keySecret);
+          await db.update(accounts).set(updateData).where(eq(accounts.id, existing.id));
+          touchedIds.add(existing.id);
+        } else {
+          if (!keySecret) return c.json({ error: `new key "${keyLabel}" requires a secret` }, 400);
+          const inserted = await db.insert(accounts).values({
+            provider: "byok",
+            email: buildByokEmail(prefix, keyLabel),
+            password: encrypt(keySecret),
+            status: "active",
+            enabled: keyInput.enabled ?? true,
+            tokens,
+            quotaLimit: -1,
+            quotaRemaining: -1,
+          }).returning();
+          if (inserted[0]) touchedIds.add(inserted[0].id);
+        }
+      }
 
-  return c.json({
-    success: true,
-    id,
-    label: account.email,
-    models: (tokens.models || []).map((m: string) => `${tokens.model_prefix || account.email}-${m}`),
-  });
+      const toDelete = groupAccounts.filter((acc) => !touchedIds.has(acc.id));
+      for (const acc of toDelete) {
+        await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, acc.id));
+        await db.delete(accounts).where(eq(accounts.id, acc.id));
+      }
+    } else {
+      for (const acc of groupAccounts) {
+        const tokens = parseByokTokens(acc.tokens);
+        const updateData: Record<string, unknown> = {
+          tokens: {
+            ...tokens,
+            base_url: nextBaseUrl,
+            format: nextFormat,
+            models: nextModels,
+            model_prefix: prefix,
+            headers: nextHeaders,
+            load_balancing_method: normalizeByokLbMethod(body.load_balancing_method || tokens.load_balancing_method),
+          },
+          updatedAt: new Date(),
+        };
+        if (body.api_key && acc.id === id) updateData.password = encrypt(body.api_key);
+        await db.update(accounts).set(updateData).where(eq(accounts.id, acc.id));
+      }
+    }
+
+    await setByokLbMethod(prefix, normalizeByokLbMethod(body.load_balancing_method || currentTokens.load_balancing_method));
+    await refreshByokRuntime();
+    broadcast({ type: "byok_updated", data: { id, label: prefix } });
+
+    return c.json({
+      success: true,
+      id,
+      label: prefix,
+      models: nextModels.map((m) => `${prefix}-${m}`),
+    });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
+  }
 });
 
 /**
- * DELETE /api/accounts/byok/:id - Delete BYOK provider
+ * DELETE /api/accounts/byok/:id - Delete a BYOK provider group and all keys in it.
  */
 accountsRouter.delete("/byok/:id", async (c) => {
   const id = Number(c.req.param("id"));
+  const account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
 
-  // Nullify foreign key references
-  await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, id));
-
-  const result = await db.delete(accounts)
-    .where(eq(accounts.id, id))
-    .returning();
-
-  if (result.length === 0) {
+  if (!account || account.provider !== "byok") {
     return c.json({ error: "BYOK provider not found" }, 404);
   }
 
-  pool.invalidate("byok" as ProviderName);
+  const prefix = getByokPrefix(account);
+  const allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  const groupAccounts = allByok.filter((acc) => getByokPrefix(acc) === prefix);
+  const deletedIds: number[] = [];
 
-  broadcast({
-    type: "byok_deleted",
-    data: { id },
-  });
+  for (const acc of groupAccounts) {
+    await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, acc.id));
+    const result = await db.delete(accounts).where(eq(accounts.id, acc.id)).returning();
+    if (result[0]) deletedIds.push(result[0].id);
+  }
 
-  // Refresh BYOK model cache
-  const { refreshByokModels } = await import("../proxy/providers/registry");
-  await refreshByokModels();
+  await refreshByokRuntime();
+  broadcast({ type: "byok_deleted", data: { id, label: prefix, deletedIds } });
 
-  return c.json({ success: true, deleted: id });
+  return c.json({ success: true, deleted: id, deletedIds, label: prefix });
 });
 
 /**
@@ -891,7 +1185,7 @@ accountsRouter.get("/:id", async (c) => {
  */
 accountsRouter.post("/", async (c) => {
   const body = await c.req.json<{
-    provider: "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+    provider: "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
     email?: string;
     password?: string;
     personalToken?: string;
@@ -1003,6 +1297,65 @@ accountsRouter.post("/", async (c) => {
       const msg = error instanceof Error ? error.message : String(error);
       return c.json({ error: `YouMind API key activation failed: ${msg}` }, 400);
     }
+  }
+
+  // ── CodeBuddy China: Bulk API key flow (ck_...) ─────────────────────
+  // Accept multiple API keys (one per line), validate format, and create
+  // account per key with auto-generated email label.
+  if (body.provider === "codebuddy-china" && body.apiKeys) {
+    const keys = body.apiKeys
+      .split("\n")
+      .map((k: string) => k.trim())
+      .filter((k: string) => k.length > 0);
+
+    if (keys.length === 0) {
+      return c.json({ error: "apiKeys is empty" }, 400);
+    }
+
+    // Validate format
+    for (const key of keys) {
+      if (!key.startsWith("ck_")) {
+        return c.json({ error: `Invalid API key format: ${key.substring(0, 20)}... (must start with ck_)` }, 400);
+      }
+    }
+
+    const created: Array<{ id: number; email: string }> = [];
+    const existingCount = await db.select().from(accounts)
+      .where(eq(accounts.provider, "codebuddy-china"))
+      .then((rows) => rows.length);
+
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const email = `cbc-account-${existingCount + i + 1}`;
+      const encryptedKey = encrypt(key);
+
+      // Store API key in BOTH password (for encryption) and tokens (for provider to read)
+      const tokens = JSON.stringify({ api_key: key });
+
+      const inserted = await db.insert(accounts).values({
+        provider: "codebuddy-china",
+        email,
+        password: encryptedKey,
+        status: "active",
+        tokens,
+        quotaLimit: -1,
+        quotaRemaining: -1,
+        lastLoginAt: new Date(),
+      }).returning();
+
+      if (inserted[0]) {
+        created.push({ id: inserted[0].id, email });
+      }
+    }
+
+    pool.invalidate("codebuddy-china" as any);
+    broadcast({ type: "account_created", data: { provider: "codebuddy-china", count: created.length } });
+
+    return c.json({
+      success: true,
+      count: created.length,
+      accounts: created,
+    }, 201);
   }
 
   if (!body.email || !body.password) {

@@ -11,9 +11,8 @@ import {
   DialogTitle as DTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Plus, Upload, RefreshCw, Play, RotateCcw, Flame, ChevronDown, Loader2, Key, Pencil, Trash2, Zap, FlaskConical, Lock, Shield } from "lucide-react";
+import { Plus, Upload, RefreshCw, Play, RotateCcw, Flame, ChevronDown, Loader2, Key, Pencil, Trash2, Zap, Lock, Shield, Eye, EyeOff } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { useWsEvent } from "@/hooks/useWebSocket";
 import {
   completeCodexOAuthCallbackUrl,
@@ -32,6 +31,7 @@ import {
   loginAccounts,
   loginAllAccounts,
   pollCodexOAuthStatus,
+  revealByokKey,
   startCodexOAuthProxy,
   stopCodexOAuth,
   testByokProvider,
@@ -42,7 +42,16 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+
+type ByokFormKey = {
+  id?: number;
+  label: string;
+  key: string;
+  enabled: boolean;
+  status?: string;
+  errorMessage?: string | null;
+};
 
 interface Account {
   id: number;
@@ -53,11 +62,12 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo", "youmind"];
+const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind"];
 
 function labelProvider(provider: string) {
   if (provider === "kiro-pro") return "Kiro Pro";
   if (provider === "codebuddy") return "CodeBuddy";
+  if (provider === "codebuddy-china") return "CodeBuddy CN";
   if (provider === "codex") return "Codex";
   if (provider === "qoder") return "Qoder";
   if (provider === "gitlab-duo") return "GitLab Duo";
@@ -83,7 +93,7 @@ export default function Accounts() {
   const [instantTokens, setInstantTokens] = useState("");
   const [cookieValue, setCookieValue] = useState("");
   const [bulkText, setBulkText] = useState("");
-  const [addMode, setAddMode] = useState<"single" | "bulk" | "instant" | "pat">("bulk");
+  const [addMode, setAddMode] = useState<"single" | "bulk" | "instant" | "pat" | "apikey">("bulk");
   const [bulkBrowserEngine, setBulkBrowserEngine] = useState("camoufox");
   const [bulkHeadless, setBulkHeadless] = useState(true);
   const [bulkConcurrency, setBulkConcurrency] = useState(3);
@@ -96,6 +106,9 @@ export default function Accounts() {
   const [gitlabBusy, setGitlabBusy] = useState(false);
   const [youmindApiKey, setYoumindApiKey] = useState("");
   const [youmindBusy, setYoumindBusy] = useState(false);
+  const [codebuddyChinaApiKey, setCodebuddyChinaApiKey] = useState("");
+  const [codebuddyChinaBulkApiKeys, setCodebuddyChinaBulkApiKeys] = useState("");
+  const [codebuddyChinaBusy, setCodebuddyChinaBusy] = useState(false);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
   const [loginPendingConcurrency, setLoginPendingConcurrency] = useState(2);
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
@@ -107,11 +120,11 @@ export default function Accounts() {
     api_key: "",
     format: "auto" as "openai" | "anthropic" | "auto",
     models: "",
+    load_balancing_method: "round_robin" as "round_robin" | "sequential" | "least_inflight",
+    keys: [{ label: "default", key: "", enabled: true }] as ByokFormKey[],
   });
-  const [expandedByokId, setExpandedByokId] = useState<number | null>(null);
-  const [byokTestResults, setByokTestResults] = useState<
-    Map<string, { status: 'testing' | 'success' | 'error'; latencyMs?: number; error?: string }>
-  >(new Map());
+  const [visibleByokSecrets, setVisibleByokSecrets] = useState<Set<string>>(new Set());
+  const [revealingByokSecret, setRevealingByokSecret] = useState<string | null>(null);
   const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const codexOauthPopupRef = useRef<Window | null>(null);
   const codexOauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -406,6 +419,64 @@ export default function Accounts() {
     finally { setYoumindBusy(false); }
   }
 
+  async function handleCodebuddyChinaApiKeyLogin() {
+    const apiKey = codebuddyChinaApiKey.trim();
+    if (!apiKey) { showError(new Error("Paste CodeBuddy China API key")); return; }
+    if (!apiKey.startsWith("ck_")) {
+      showError(new Error("CodeBuddy China API key must start with ck_"));
+      return;
+    }
+    setCodebuddyChinaBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy-china",
+          apiKey,
+        }),
+      });
+      const labelText = res?.email || "account";
+      showSuccess(res?.updated
+        ? `CodeBuddy CN key updated (${labelText})`
+        : `CodeBuddy CN ${labelText} added successfully`);
+      setCodebuddyChinaApiKey("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyChinaBusy(false); }
+  }
+
+  async function handleCodeBuddyChinaBulkApiKey() {
+    const keysText = codebuddyChinaBulkApiKeys.trim();
+    if (!keysText) { showError(new Error("Paste CodeBuddy China API keys")); return; }
+    
+    const keys = keysText.split("\n").map(k => k.trim()).filter(Boolean);
+    if (keys.length === 0) { showError(new Error("No valid API keys found")); return; }
+    
+    for (const key of keys) {
+      if (!key.startsWith("ck_")) {
+        showError(new Error(`Invalid API key format: ${key} (must start with ck_)`));
+        return;
+      }
+    }
+
+    setCodebuddyChinaBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy-china",
+          apiKeys: keysText,
+        }),
+      });
+      showSuccess(`Added ${res.count} CodeBuddy CN account(s) successfully`);
+      setCodebuddyChinaBulkApiKeys("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyChinaBusy(false); }
+  }
+
   async function handleBulkImport() {
     if (!addDialogProvider || !bulkText.trim()) { showError(new Error("Paste email|password lines")); return; }
     try {
@@ -602,6 +673,7 @@ export default function Accounts() {
     if (state) {
       stopCodexOAuth(state).catch(() => {});
     }
+    setCodebuddyChinaBulkApiKeys("");
     setAddDialogProvider(null);
   }
 
@@ -651,28 +723,116 @@ export default function Accounts() {
     await load();
   }
 
+  const BYOK_KEY_PLACEHOLDER = "••••••••";
+
+  const emptyByokForm = () => ({
+    label: "",
+    base_url: "",
+    api_key: "",
+    format: "auto" as "openai" | "anthropic" | "auto",
+    models: "",
+    load_balancing_method: "round_robin" as "round_robin" | "sequential" | "least_inflight",
+    keys: [{ label: "default", key: "", enabled: true }] as ByokFormKey[],
+  });
+
+  function byokSecretVisibilityId(key: ByokFormKey, index: number) {
+    return key.id ? `id-${key.id}` : `new-${index}`;
+  }
+
+  async function toggleByokSecretVisibility(key: ByokFormKey, index: number) {
+    const visibilityId = byokSecretVisibilityId(key, index);
+    const isVisible = visibleByokSecrets.has(visibilityId);
+
+    if (isVisible) {
+      setVisibleByokSecrets((current) => {
+        const next = new Set(current);
+        next.delete(visibilityId);
+        return next;
+      });
+      return;
+    }
+
+    if (key.id && key.key === BYOK_KEY_PLACEHOLDER) {
+      setRevealingByokSecret(visibilityId);
+      try {
+        const revealed = await revealByokKey(key.id);
+        updateByokKeyRow(index, { key: revealed.key });
+      } catch (err) {
+        showError(err);
+        setRevealingByokSecret(null);
+        return;
+      }
+      setRevealingByokSecret(null);
+    }
+
+    setVisibleByokSecrets((current) => {
+      const next = new Set(current);
+      next.add(visibilityId);
+      return next;
+    });
+  }
+
+  function addByokKeyRow() {
+    setByokForm((form) => ({
+      ...form,
+      keys: [...form.keys, { label: `key-${form.keys.length + 1}`, key: "", enabled: true }],
+    }));
+  }
+
+  function updateByokKeyRow(index: number, patch: Partial<ByokFormKey>) {
+    setByokForm((form) => ({
+      ...form,
+      keys: form.keys.map((key, i) => i === index ? { ...key, ...patch } : key),
+    }));
+  }
+
+  function removeByokKeyRow(index: number) {
+    setByokForm((form) => ({
+      ...form,
+      keys: form.keys.length <= 1
+        ? [{ label: "default", key: "", enabled: true }]
+        : form.keys.filter((_, i) => i !== index),
+    }));
+  }
+
+  function buildByokKeyPayload(isEdit: boolean) {
+    return byokForm.keys.map((key, index) => ({
+      id: key.id,
+      label: key.label.trim().toLowerCase() || `key-${index + 1}`,
+      key: key.key && key.key !== BYOK_KEY_PLACEHOLDER ? key.key.trim() : undefined,
+      enabled: key.enabled,
+      priority: index,
+    })).filter((key) => isEdit || Boolean(key.key));
+  }
+
   async function handleAddByok() {
-    if (!byokForm.label || !byokForm.base_url || !byokForm.api_key || !byokForm.models) {
-      showError(new Error("All fields are required"));
+    if (!byokForm.label || !byokForm.base_url || !byokForm.models) {
+      showError(new Error("Provider name, base URL, and models are required"));
       return;
     }
 
     const models = byokForm.models.split(",").map(m => m.trim()).filter(Boolean);
+    const apiKeys = buildByokKeyPayload(false);
     if (models.length === 0) {
       showError(new Error("At least one model is required"));
       return;
     }
+    if (apiKeys.length === 0) {
+      showError(new Error("Add at least one API key"));
+      return;
+    }
 
     try {
-      await createByokProvider({
-        label: byokForm.label,
-        base_url: byokForm.base_url,
-        api_key: byokForm.api_key,
+      const created = await createByokProvider({
+        label: byokForm.label.trim().toLowerCase(),
+        base_url: byokForm.base_url.trim(),
+        api_keys: apiKeys,
         format: byokForm.format,
+        load_balancing_method: byokForm.load_balancing_method,
         models,
       });
-      showSuccess(`BYOK provider "${byokForm.label}" created successfully`);
-      setByokForm({ label: "", base_url: "", api_key: "", format: "auto", models: "" });
+      showSuccess(`BYOK provider "${created.label}" created with ${created.key_count || apiKeys.length} key(s)`);
+      setByokForm(emptyByokForm());
       setByokEditId(null);
       setByokDialogOpen(false);
       await load();
@@ -689,26 +849,26 @@ export default function Accounts() {
     }
 
     const models = byokForm.models.split(",").map(m => m.trim()).filter(Boolean);
+    const apiKeys = buildByokKeyPayload(true);
     if (models.length === 0) {
       showError(new Error("At least one model is required"));
       return;
     }
+    if (apiKeys.length === 0) {
+      showError(new Error("At least one key row is required"));
+      return;
+    }
 
     try {
-      const updateData: any = {
-        base_url: byokForm.base_url,
+      await updateByokProvider(byokEditId, {
+        base_url: byokForm.base_url.trim(),
         format: byokForm.format,
+        load_balancing_method: byokForm.load_balancing_method,
         models,
-      };
-
-      // Only include api_key if user entered a new one (not the masked placeholder)
-      if (byokForm.api_key && byokForm.api_key.trim() && byokForm.api_key !== BYOK_KEY_PLACEHOLDER) {
-        updateData.api_key = byokForm.api_key;
-      }
-
-      await updateByokProvider(byokEditId, updateData);
+        api_keys: apiKeys,
+      });
       showSuccess(`BYOK provider "${byokForm.label}" updated successfully`);
-      setByokForm({ label: "", base_url: "", api_key: "", format: "auto", models: "" });
+      setByokForm(emptyByokForm());
       setByokEditId(null);
       setByokDialogOpen(false);
       await load();
@@ -717,22 +877,37 @@ export default function Accounts() {
     }
   }
 
-  const BYOK_KEY_PLACEHOLDER = "••••••••";
+  function copyByokModel(model: string) {
+    navigator.clipboard?.writeText(model).then(() => {
+      showSuccess(`Copied ${model}`);
+    }).catch(() => showError(new Error("Clipboard not available")));
+  }
 
   function handleEditByok(provider: ByokProvider) {
     setByokEditId(provider.id);
     setByokForm({
       label: provider.label,
       base_url: provider.base_url,
-      api_key: BYOK_KEY_PLACEHOLDER, // Show masked indicator that key exists
+      api_key: BYOK_KEY_PLACEHOLDER,
       format: provider.format,
       models: provider.models.join(", "),
+      load_balancing_method: provider.load_balancing_method || "round_robin",
+      keys: (provider.keys && provider.keys.length > 0
+        ? provider.keys.map((key, index) => ({
+            id: key.id,
+            label: key.label,
+            key: BYOK_KEY_PLACEHOLDER,
+            enabled: key.enabled !== false,
+            status: key.status,
+            errorMessage: key.errorMessage,
+          }))
+        : [{ id: provider.id, label: "default", key: BYOK_KEY_PLACEHOLDER, enabled: true }]) as ByokFormKey[],
     });
     setByokDialogOpen(true);
   }
 
   function handleCloseByokDialog() {
-    setByokForm({ label: "", base_url: "", api_key: "", format: "auto", models: "" });
+    setByokForm(emptyByokForm());
     setByokEditId(null);
     setByokDialogOpen(false);
   }
@@ -750,28 +925,6 @@ export default function Accounts() {
       }
     } catch (err) {
       showError(err);
-    }
-  }
-
-  async function handleTestByokModel(providerId: number, model: string) {
-    const key = `${providerId}-${model}`;
-    setByokTestResults(prev => new Map(prev).set(key, { status: 'testing' }));
-    try {
-      const result = await testByokProvider(providerId, model);
-      setByokTestResults(prev => new Map(prev).set(key, {
-        status: result.success ? 'success' : 'error',
-        latencyMs: result.latency_ms,
-        error: result.error,
-      }));
-      if (result.auto_fixed) {
-        showSuccess(`✓ ${model} OK (${result.latency_ms}ms) — account auto-fixed to active`);
-        await load();
-      }
-    } catch (err) {
-      setByokTestResults(prev => new Map(prev).set(key, {
-        status: 'error',
-        error: err instanceof Error ? err.message : String(err),
-      }));
     }
   }
 
@@ -983,28 +1136,33 @@ export default function Accounts() {
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {byokProviders.map((provider) => (
-              <Card key={provider.id} className="border-[var(--border)] overflow-hidden hover:border-[var(--primary)]/50 transition-all duration-200">
-                <CardHeader
-                  className="pb-3 cursor-pointer hover:bg-[var(--secondary)]/30 transition-colors"
-                  onClick={() => setExpandedByokId(expandedByokId === provider.id ? null : provider.id)}
-                >
+              <Card
+                key={provider.id}
+                className="border-[var(--border)] overflow-hidden hover:border-[var(--primary)]/50 transition-all duration-200 cursor-pointer"
+                onClick={() => navigate(`/accounts/byok/${provider.label}`)}
+              >
+                <CardHeader className="pb-3 hover:bg-[var(--secondary)]/30 transition-colors">
                   <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <CardTitle className="text-base">{provider.label}</CardTitle>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CardTitle className="text-base truncate">{provider.label}</CardTitle>
                         <Badge
-                          variant={provider.status === "active" ? "default" : "secondary"}
-                          className={provider.status === "active"
+                          variant={(provider.active_key_count || 0) > 0 ? "default" : "secondary"}
+                          className={(provider.active_key_count || 0) > 0
                             ? "bg-[var(--primary)]/15 text-[var(--primary)] border border-[var(--primary)]/30"
                             : "bg-[var(--warning)]/10 text-[var(--warning)] border border-[var(--warning)]/30"
                           }
                         >
-                          {provider.status === "active" ? "● Active" : "○ Inactive"}
+                          {(provider.active_key_count || 0) > 0 ? "● Ready" : "○ No active key"}
                         </Badge>
                       </div>
                       <p className="text-xs text-[var(--muted-foreground)] mt-1 truncate">{provider.base_url}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+                        <span className="rounded-full bg-[var(--secondary)] px-2 py-0.5">{provider.active_key_count ?? 0}/{provider.key_count ?? provider.keys?.length ?? 1} keys active</span>
+                        <span className="rounded-full bg-[var(--secondary)] px-2 py-0.5">LB: {provider.load_balancing_method === "sequential" ? "Sequential" : provider.load_balancing_method === "least_inflight" ? "Least in-flight" : "Round robin"}</span>
+                      </div>
                     </div>
-                    <ChevronDown className={`h-4 w-4 transition-transform duration-200 text-[var(--muted-foreground)] ${expandedByokId === provider.id ? "rotate-180" : ""}`} />
+                    <ChevronDown className="h-4 w-4 -rotate-90 text-[var(--muted-foreground)]" />
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1017,13 +1175,23 @@ export default function Accounts() {
                       <span className="text-[var(--muted-foreground)]">Models</span>
                       <span className="text-[var(--foreground)] font-medium">{provider.models.length}</span>
                     </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--muted-foreground)]">API Keys</span>
+                      <span className="text-[var(--foreground)] font-medium">{provider.active_key_count ?? 0} active / {provider.key_count ?? provider.keys?.length ?? 1} total</span>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <p className="text-xs text-[var(--muted-foreground)]">Available Models</p>
                     <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
                       {provider.available_models?.slice(0, 10).map((model) => (
-                        <Badge key={model} variant="outline" className="text-xs border-[var(--primary)]/20 text-[var(--primary)]/80 bg-[var(--primary)]/[0.05] font-mono">
+                        <Badge
+                          key={model}
+                          variant="outline"
+                          className="text-xs border-[var(--primary)]/20 text-[var(--primary)]/80 bg-[var(--primary)]/[0.05] font-mono cursor-copy"
+                          onClick={(e) => { e.stopPropagation(); copyByokModel(model); }}
+                          title="Click to copy model id"
+                        >
                           {model}
                         </Badge>
                       ))}
@@ -1040,15 +1208,15 @@ export default function Accounts() {
                       variant="outline"
                       size="sm"
                       className="gap-1.5 text-[var(--foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-                      onClick={() => handleEditByok(provider)}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/accounts/byok/${provider.label}`); }}
                     >
-                      <Pencil className="h-3.5 w-3.5" /> Edit
+                      <Pencil className="h-3.5 w-3.5" /> Manage
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       className="gap-1.5 border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]"
-                      onClick={() => handleTestByok(provider.id, provider.label)}
+                      onClick={(e) => { e.stopPropagation(); handleTestByok(provider.id, provider.label); }}
                     >
                       <Zap className="h-3.5 w-3.5" /> Test
                     </Button>
@@ -1056,92 +1224,12 @@ export default function Accounts() {
                       variant="outline"
                       size="sm"
                       className="gap-1.5 border-[var(--error)]/30 text-[var(--error)] hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
-                      onClick={() => handleDeleteByok(provider.id, provider.label)}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteByok(provider.id, provider.label); }}
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Delete
                     </Button>
                   </div>
                 </CardContent>
-
-                {expandedByokId === provider.id && (
-                  <div className="border-t border-[var(--border)] p-4 bg-[var(--secondary)]/[0.06]">
-                    <TooltipProvider>
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2 mb-3">
-                          <FlaskConical className="h-4 w-4 text-[var(--info)]" />
-                          <h4 className="text-sm font-medium text-[var(--foreground)]">
-                            Test Models
-                          </h4>
-                          <span className="text-xs text-[var(--muted-foreground)] bg-[var(--secondary)] px-1.5 py-0.5 rounded">
-                            {provider.models.length}
-                          </span>
-                        </div>
-                        <div className="space-y-2 max-h-60 overflow-y-auto">
-                          {provider.models.map((model) => {
-                            const key = `${provider.id}-${model}`;
-                            const result = byokTestResults.get(key);
-
-                            return (
-                              <div
-                                key={model}
-                                className={`flex items-center justify-between p-2.5 rounded-md bg-[var(--card)] border transition-colors hover:border-[var(--primary)]/30 ${
-                                  result?.status === 'success'
-                                    ? 'border-[var(--success)]/30'
-                                    : result?.status === 'error'
-                                    ? 'border-[var(--error)]/30'
-                                    : 'border-[var(--border)]'
-                                }`}
-                              >
-                                <Badge variant="outline" className="font-mono text-xs border-[var(--primary)]/20 text-[var(--primary)]/80 bg-[var(--primary)]/[0.05]">
-                                  {model}
-                                </Badge>
-
-                                <div className="flex items-center gap-2">
-                                  {result?.status === 'testing' && (
-                                    <>
-                                      <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
-                                      <span className="text-xs text-[var(--muted-foreground)]">Testing...</span>
-                                    </>
-                                  )}
-
-                                  {result?.status === 'success' && (
-                                    <span className="inline-flex items-center gap-1 text-xs text-[var(--success)] font-medium bg-[var(--success)]/10 px-2 py-0.5 rounded-full">
-                                      ✓ {result.latencyMs}ms
-                                    </span>
-                                  )}
-
-                                  {result?.status === 'error' && (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <span className="inline-flex items-center gap-1 text-xs text-[var(--error)] cursor-help bg-[var(--error)]/10 px-2 py-0.5 rounded-full">
-                                          ✗ Error
-                                        </span>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p className="max-w-xs text-xs">{result.error}</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  )}
-
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7 px-2.5 text-xs gap-1 border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]"
-                                    disabled={result?.status === 'testing'}
-                                    onClick={() => handleTestByokModel(provider.id, model)}
-                                  >
-                                    <Zap className="h-3 w-3" />
-                                    {result?.status === 'testing' ? '...' : 'Test'}
-                                  </Button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </TooltipProvider>
-                  </div>
-                )}
               </Card>
             ))}
           </div>
@@ -1150,7 +1238,7 @@ export default function Accounts() {
 
       {/* BYOK Add/Edit Dialog */}
       <Dialog open={byokDialogOpen} onOpenChange={(open) => !open && handleCloseByokDialog()}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
@@ -1196,33 +1284,80 @@ export default function Accounts() {
 
             {/* Authentication */}
             <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/[0.06] p-3.5">
-              <div className="flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Authentication</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Lock className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">API Key Pool</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={addByokKeyRow}>
+                  <Plus className="h-3 w-3" /> Add Key
+                </Button>
               </div>
+              <p className="text-xs text-[var(--muted-foreground)]">
+                Multiple keys under the same provider prefix are load-balanced automatically. Existing keys are masked; leave them masked to keep the stored secret.
+              </p>
 
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[var(--foreground)] flex items-center gap-2">
-                  API Key
-                  {byokEditId && (
-                    <span className="inline-flex items-center gap-1 text-xs text-[var(--success)] font-normal bg-[var(--success)]/10 px-1.5 py-0.5 rounded-full">✓ Saved</span>
-                  )}
-                </label>
-                <Input
-                  type="password"
-                  value={byokForm.api_key}
-                  onChange={(e) => setByokForm({ ...byokForm, api_key: e.target.value })}
-                  onFocus={() => {
-                    if (byokEditId && byokForm.api_key === BYOK_KEY_PLACEHOLDER) {
-                      setByokForm({ ...byokForm, api_key: "" });
-                    }
-                  }}
-                  placeholder={byokEditId ? 'Enter new key to replace, or leave blank' : 'sk-...'}
-                  className="focus:ring-1 focus:ring-[var(--ring)]"
-                />
-                {byokEditId && (
-                  <p className="text-xs text-[var(--muted-foreground)]">Leave blank to keep existing API key</p>
-                )}
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {byokForm.keys.map((keyRow, index) => (
+                  <div key={`${keyRow.id || "new"}-${index}`} className="rounded-md border border-[var(--border)] bg-[var(--card)] p-2.5 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={keyRow.label}
+                        onChange={(e) => updateByokKeyRow(index, { label: e.target.value })}
+                        placeholder="key label e.g. main"
+                        className="h-8 flex-1 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => updateByokKeyRow(index, { enabled: !keyRow.enabled })}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${keyRow.enabled ? "bg-[var(--primary)]" : "bg-[var(--border)]"}`}
+                        title={keyRow.enabled ? "Enabled" : "Disabled"}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${keyRow.enabled ? "translate-x-5" : "translate-x-1"}`} />
+                      </button>
+                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 text-[var(--error)]" onClick={() => removeByokKeyRow(index)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const visibilityId = byokSecretVisibilityId(keyRow, index);
+                        const secretVisible = visibleByokSecrets.has(visibilityId);
+                        return (
+                          <div className="flex flex-1 items-center gap-1">
+                            <Input
+                              type={secretVisible ? "text" : "password"}
+                              value={keyRow.key}
+                              onChange={(e) => updateByokKeyRow(index, { key: e.target.value })}
+                              onFocus={() => {
+                                if (keyRow.key === BYOK_KEY_PLACEHOLDER) updateByokKeyRow(index, { key: "" });
+                              }}
+                              placeholder={byokEditId ? "Paste new key to replace, or keep masked" : "sk-..."}
+                              className="h-8 flex-1 font-mono text-xs"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 shrink-0"
+                              onClick={() => toggleByokSecretVisibility(keyRow, index)}
+                              disabled={revealingByokSecret === visibilityId}
+                              title={secretVisible ? "Hide key" : "Show key"}
+                            >
+                              {revealingByokSecret === visibilityId ? <Loader2 className="h-4 w-4 animate-spin" /> : secretVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                        );
+                      })()}
+                      {keyRow.status && (
+                        <Badge variant="outline" className={keyRow.status === "active" && keyRow.enabled ? "border-[var(--success)]/30 text-[var(--success)]" : "border-[var(--warning)]/30 text-[var(--warning)]"}>
+                          {keyRow.enabled ? keyRow.status : "disabled"}
+                        </Badge>
+                      )}
+                    </div>
+                    {keyRow.errorMessage && <p className="text-[10px] text-[var(--error)] truncate">{keyRow.errorMessage}</p>}
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -1230,17 +1365,34 @@ export default function Accounts() {
             <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/[0.06] p-3.5">
               <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Configuration</p>
 
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[var(--foreground)]">API Format</label>
-                <select
-                  value={byokForm.format}
-                  onChange={(e) => setByokForm({ ...byokForm, format: e.target.value as any })}
-                  className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
-                >
-                  <option value="auto">Auto-detect</option>
-                  <option value="openai">OpenAI-compatible</option>
-                  <option value="anthropic">Anthropic</option>
-                </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[var(--foreground)]">API Format</label>
+                  <select
+                    value={byokForm.format}
+                    onChange={(e) => setByokForm({ ...byokForm, format: e.target.value as any })}
+                    className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="openai">OpenAI-compatible</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-[var(--foreground)]">Load Balancing</label>
+                  <select
+                    value={byokForm.load_balancing_method}
+                    onChange={(e) => setByokForm({ ...byokForm, load_balancing_method: e.target.value as any })}
+                    className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+                  >
+                    <option value="round_robin">Round Robin</option>
+                    <option value="sequential">Sequential</option>
+                  </select>
+                  <p className="text-[10px] text-[var(--muted-foreground)]">
+                    Per-provider BYOK setting. Round Robin distributes requests; Sequential prefers the first healthy key.
+                  </p>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1314,6 +1466,8 @@ export default function Accounts() {
                 ? "Add via Personal Access Token, single Gmail (bot login), or bulk email|password."
                 : addDialogProvider === "youmind"
                 ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
+                : addDialogProvider === "codebuddy-china"
+                ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
           </DialogHeader>
@@ -1363,6 +1517,12 @@ export default function Accounts() {
               <button onClick={() => setAddMode("pat")}
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >API Key (sk-ym-...)</button>
+            </div>
+          ) : addDialogProvider === "codebuddy-china" ? (
+            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+              <button onClick={() => setAddMode("apikey")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Bulk API Key (ck_...)</button>
             </div>
           ) : (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
@@ -1471,6 +1631,33 @@ export default function Accounts() {
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={gitlabBusy}>Cancel</Button>
                 <Button onClick={handleGitlabPatLogin} disabled={gitlabBusy || !gitlabPat.trim()}>
                   {gitlabBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Validating PAT...</>) : "Add Account"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "apikey" && addDialogProvider === "codebuddy-china" && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-[var(--foreground)]">API Keys (satu per baris, prefix ck_)</label>
+                <textarea
+                  value={codebuddyChinaBulkApiKeys}
+                  onChange={(e) => setCodebuddyChinaBulkApiKeys(e.target.value)}
+                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  placeholder="ck_fpigz68zr75s...
+ck_abc123def456...
+ck_xyz789ghi012..."
+                  disabled={codebuddyChinaBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Paste satu atau lebih CodeBuddy China API key (prefix <code>ck_</code>), satu per baris. 
+                  Model tersedia: <code>cbc-deepseek-v3</code>, <code>cbc-claude-haiku-4.5</code>, <code>cbc-kimi-k2.5</code>, dll.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyChinaBusy}>Cancel</Button>
+                <Button onClick={handleCodeBuddyChinaBulkApiKey} disabled={codebuddyChinaBusy || !codebuddyChinaBulkApiKeys.trim()}>
+                  {codebuddyChinaBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
                 </Button>
               </div>
             </div>
