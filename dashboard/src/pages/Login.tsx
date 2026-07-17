@@ -25,12 +25,16 @@ export default function Login({ onLogin }: LoginProps) {
     setLoading(true);
     setError(null);
 
-    const valid = await validateApiKey(key.trim());
-    if (valid) {
-      localStorage.setItem("api_key", key.trim());
-      onLogin();
-    } else {
-      setError("Invalid API key");
+    try {
+      const valid = await validateApiKey(key.trim());
+      if (valid) {
+        localStorage.setItem("api_key", key.trim());
+        onLogin();
+      } else {
+        setError("Invalid API key — paste the key from .env (API_KEY=...)");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cannot reach API server");
     }
     setLoading(false);
   }

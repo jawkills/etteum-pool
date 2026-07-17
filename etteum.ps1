@@ -61,11 +61,29 @@ function Invoke-Start {
   }
 
   Write-Host "Starting Etteum..."
-  $proc = Start-Process -FilePath "bun" -ArgumentList "scripts/production.ts","--skip-build" `
-    -WorkingDirectory $ProjectDir -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile `
+  $errLog = "$LogFile.err"
+  $bunExe = $null
+  foreach ($cand in @(
+    (Join-Path $env:USERPROFILE ".bun\bin\bun.exe"),
+    (Join-Path $HOME ".bun\bin\bun.exe"),
+    "C:\Users\Administrator\.bun\bin\bun.exe"
+  )) {
+    if (Test-Path $cand) { $bunExe = $cand; break }
+  }
+  if (-not $bunExe) {
+    $cmd = Get-Command bun -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -like "*.exe") { $bunExe = $cmd.Source }
+  }
+  if (-not $bunExe) {
+    Write-Host "bun.exe not found. Install Bun or add ~/.bun/bin to PATH." -ForegroundColor Red
+    return
+  }
+
+  $proc = Start-Process -FilePath $bunExe -ArgumentList "scripts/production.ts","--skip-build" `
+    -WorkingDirectory $ProjectDir -RedirectStandardOutput $LogFile -RedirectStandardError $errLog `
     -WindowStyle Hidden -PassThru
   $proc.Id | Out-File -FilePath $PidFile -Encoding ascii
-  Start-Sleep -Seconds 1
+  Start-Sleep -Seconds 3
 
   if (-not $proc.HasExited) {
     Write-Host "Etteum started (PID $($proc.Id))" -ForegroundColor Green
@@ -76,6 +94,7 @@ function Invoke-Start {
     Remove-Item $PidFile -ErrorAction SilentlyContinue
     Write-Host "Failed to start. Check logs at $LogFile" -ForegroundColor Red
     Get-Content $LogFile -Tail 5 -ErrorAction SilentlyContinue
+    Get-Content $errLog -Tail 10 -ErrorAction SilentlyContinue
   }
 }
 

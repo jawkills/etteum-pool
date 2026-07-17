@@ -93,3 +93,7 @@ test-compat.out
 /test-*.sh
 /test-*.mjs
 /test-*.js
+
+# git worktrees
+.worktrees/
+
