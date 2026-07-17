@@ -97,3 +97,11 @@ test-compat.out
 # git worktrees
 .worktrees/
 
+# Grok HTTP farm runtime (in-tree scripts/grok-farm)
+scripts/grok-farm/.env
+scripts/grok-farm/.venv/
+scripts/grok-farm/results/
+scripts/grok-farm/proxies.txt
+scripts/grok-farm/__pycache__/
+scripts/grok-farm/*.pyc
+

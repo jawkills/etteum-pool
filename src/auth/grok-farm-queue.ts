@@ -160,7 +160,10 @@ class GrokFarmQueue {
     const script = path.join(farmDir, "http_farm.py");
 
     if (!existsSync(script)) {
-      return { ok: false, error: `http_farm.py not found at ${script}. Set GROK_FARM_DIR.` };
+      return {
+        ok: false,
+        error: `http_farm.py not found at ${script}. Expected in-tree scripts/grok-farm (or set GROK_FARM_DIR).`,
+      };
     }
 
     const apiKey = config.apiKey;
@@ -169,6 +172,19 @@ class GrokFarmQueue {
     }
 
     const etteumUrl = process.env.ETTEUM_PUBLIC_URL || `http://127.0.0.1:${config.port}`;
+
+    // Prefer in-tree venv python if installed (Windows / Unix)
+    const venvWin = path.join(farmDir, ".venv", "Scripts", "python.exe");
+    const venvUnix = path.join(farmDir, ".venv", "bin", "python");
+    let pyBin = config.grokFarmPython;
+    let pyArgs = [...config.grokFarmPythonArgs];
+    if (existsSync(venvWin)) {
+      pyBin = venvWin;
+      pyArgs = [];
+    } else if (existsSync(venvUnix)) {
+      pyBin = venvUnix;
+      pyArgs = [];
+    }
 
     this.attemptEmail.clear();
     this.setStatus({
@@ -181,7 +197,7 @@ class GrokFarmQueue {
     });
 
     const spawnArgs = [
-      ...config.grokFarmPythonArgs,
+      ...pyArgs,
       script,
       "-n",
       String(count),
@@ -191,7 +207,7 @@ class GrokFarmQueue {
       "--push",
     ];
 
-    const child = spawn(config.grokFarmPython, spawnArgs, {
+    const child = spawn(pyBin, spawnArgs, {
       cwd: farmDir,
       env: {
         ...process.env,
