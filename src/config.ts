@@ -111,6 +111,10 @@ export const config = {
   browserEngine: process.env.BROWSER_ENGINE || "camoufox",
   captchaService: process.env.CAPTCHA_SERVICE || "none",
   captchaApiKey: process.env.CAPTCHA_API_KEY || "",
+  // Grok CLI HTTP farm (subprocess automation)
+  grokFarmDir: process.env.GROK_FARM_DIR || "C:\\Users\\Administrator\\Documents\\bot\\grok-farm-share",
+  grokFarmPython: process.env.GROK_FARM_PYTHON || "py",
+  grokFarmPythonArgs: (process.env.GROK_FARM_PYTHON_ARGS || "-3").split(/\s+/).filter(Boolean),
   // Providers: kiro, kiro-pro, codebuddy, canva, codex, qoder, gitlab-duo
   providers: ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"] as const,
 } as const;
