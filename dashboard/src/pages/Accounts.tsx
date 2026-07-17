@@ -29,6 +29,10 @@ import {
   getCodexAuthorize,
   importAccounts,
   importGrokCliAccounts,
+  fetchGrokFarmStatus,
+  startGrokFarm,
+  stopGrokFarm,
+  type GrokFarmStatus,
   loginAccounts,
   loginAllAccounts,
   pollCodexOAuthStatus,
@@ -109,6 +113,11 @@ export default function Accounts() {
   const [youmindApiKey, setYoumindApiKey] = useState("");
   const [youmindBusy, setYoumindBusy] = useState(false);
   const [grokCliBusy, setGrokCliBusy] = useState(false);
+  const [grokMode, setGrokMode] = useState<"farm" | "import">("farm");
+  const [farmCount, setFarmCount] = useState(5);
+  const [farmConcurrent, setFarmConcurrent] = useState(2);
+  const [farmStatus, setFarmStatus] = useState<GrokFarmStatus | null>(null);
+  const [farmBusy, setFarmBusy] = useState(false);
   const [codebuddyChinaApiKey, setCodebuddyChinaApiKey] = useState("");
   const [codebuddyChinaBulkApiKeys, setCodebuddyChinaBulkApiKeys] = useState("");
   const [codebuddyChinaBusy, setCodebuddyChinaBusy] = useState(false);
@@ -288,6 +297,32 @@ export default function Accounts() {
     setByokProviders(byokRes.providers || []);
   });
 
+  useWsEvent(["grok_farm_status", "grok_farm_started", "grok_farm_complete"], (msg) => {
+    if (msg.data) setFarmStatus(msg.data as GrokFarmStatus);
+    if (msg.type === "grok_farm_complete") {
+      load().catch(() => {});
+    }
+  });
+
+  useEffect(() => {
+    const dialogOpen = addDialogProvider === "grok-cli";
+    const running = farmStatus?.running === true;
+    if (!dialogOpen && !running) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetchGrokFarmStatus() as { data?: GrokFarmStatus };
+        if (!cancelled && res?.data) setFarmStatus(res.data);
+      } catch { /* ignore poll errors */ }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [addDialogProvider, farmStatus?.running]);
+
   async function handleToggleAutoWarmup(provider: Provider) {
     const key = `auto_warmup_provider_${provider}`;
     const next = settingsMap[key] === "true" ? "false" : "true";
@@ -435,6 +470,28 @@ export default function Accounts() {
       await load();
     } catch (err) { showError(err); }
     finally { setGrokCliBusy(false); }
+  }
+
+  async function handleGrokFarmStart() {
+    const count = Math.max(1, Math.floor(farmCount) || 1);
+    const concurrent = Math.max(1, Math.floor(farmConcurrent) || 1);
+    setFarmBusy(true);
+    try {
+      const res = await startGrokFarm({ count, concurrent }) as { data?: GrokFarmStatus };
+      if (res?.data) setFarmStatus(res.data);
+      showSuccess("Grok farm started");
+    } catch (err) { showError(err); }
+    finally { setFarmBusy(false); }
+  }
+
+  async function handleGrokFarmStop() {
+    setFarmBusy(true);
+    try {
+      const res = await stopGrokFarm() as { data?: GrokFarmStatus };
+      if (res?.data) setFarmStatus(res.data);
+      showSuccess("Grok farm stop requested");
+    } catch (err) { showError(err); }
+    finally { setFarmBusy(false); }
   }
 
   async function handleCodebuddyChinaApiKeyLogin() {
@@ -683,8 +740,9 @@ export default function Accounts() {
       setAddMode("pat");
     }
     if (provider === "grok-cli") {
-      setAddMode("bulk");
+      setGrokMode("farm");
       setBulkText("");
+      setAddMode("bulk");
     }
     setAddDialogProvider(provider);
   }
@@ -1491,7 +1549,7 @@ export default function Accounts() {
                 : addDialogProvider === "codebuddy-china"
                 ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
                 : addDialogProvider === "grok-cli"
-                ? "Paste CPA JSON (flat object, nested tokens harvest, array, or NDJSON). Requires email + access_token + refresh_token."
+                ? "HTTP farm (no browser) or paste CPA JSON import. Farm needs Boterdrop :8000 + tempmail; auto-imports to pool."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
           </DialogHeader>
@@ -1544,9 +1602,12 @@ export default function Accounts() {
             </div>
           ) : addDialogProvider === "grok-cli" ? (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
-              <button onClick={() => setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Import JSON (CPA)</button>
+              <button onClick={() => setGrokMode("farm")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${grokMode === "farm" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Farm</button>
+              <button onClick={() => setGrokMode("import")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${grokMode === "import" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Import JSON</button>
             </div>
           ) : addDialogProvider === "codebuddy-china" ? (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
@@ -1612,7 +1673,78 @@ export default function Accounts() {
             </div>
           )}
 
-          {addMode === "bulk" && addDialogProvider === "grok-cli" && (
+          {addDialogProvider === "grok-cli" && grokMode === "farm" && (
+            <div className="space-y-4">
+              <p className="text-xs text-[var(--muted-foreground)]">
+                HTTP farm (no browser). Needs Boterdrop :8000 + tempmail. Auto-imports to pool.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm text-[var(--foreground)]">Count</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={farmCount}
+                    onChange={(e) => setFarmCount(Number(e.target.value) || 1)}
+                    className="mt-1"
+                    disabled={farmBusy || farmStatus?.running}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-[var(--foreground)]">Concurrent</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={farmConcurrent}
+                    onChange={(e) => setFarmConcurrent(Number(e.target.value) || 1)}
+                    className="mt-1"
+                    disabled={farmBusy || farmStatus?.running}
+                  />
+                </div>
+              </div>
+              {farmStatus && (
+                <div className="rounded-md border border-[var(--border)] bg-[var(--secondary)]/40 p-3 space-y-1 text-xs font-mono">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <span>running: <strong>{farmStatus.running ? "yes" : "no"}</strong></span>
+                    <span>ok/fail/target: <strong>{farmStatus.success}/{farmStatus.failed}/{farmStatus.target}</strong></span>
+                    {farmStatus.pushFailures > 0 && (
+                      <span className="text-amber-500">pushFailures: {farmStatus.pushFailures}</span>
+                    )}
+                  </div>
+                  {farmStatus.lastMessage && (
+                    <div className="text-[var(--muted-foreground)] break-all">last: {farmStatus.lastMessage}</div>
+                  )}
+                  {farmStatus.error && (
+                    <div className="text-red-500 break-all">error: {farmStatus.error}</div>
+                  )}
+                  {farmStatus.batchDir && (
+                    <div className="text-[var(--muted-foreground)] break-all">batch: {farmStatus.batchDir}</div>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={farmBusy}>
+                  Close
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleGrokFarmStop}
+                  disabled={farmBusy || !farmStatus?.running}
+                >
+                  Stop
+                </Button>
+                <Button onClick={handleGrokFarmStart} disabled={farmBusy || farmStatus?.running}>
+                  {farmBusy || farmStatus?.running
+                    ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {farmStatus?.running ? "Running..." : "Starting..."}</>)
+                    : "Start"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addDialogProvider === "grok-cli" && grokMode === "import" && (
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-[var(--foreground)]">CPA JSON</label>

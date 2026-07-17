@@ -1,11 +1,8 @@
 function resolveApiBase(): string {
   if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
-  const port = window.location.port;
-  if (!port || port === "443" || port === "80") {
-    return window.location.origin;
-  }
-  const backendPort = import.meta.env.VITE_BACKEND_PORT || (Number(port) - 1) || "1930";
-  return `http://${window.location.hostname}:${backendPort}`;
+  // Same-origin by default — dashboard static server proxies /api and /v1.
+  // Override with VITE_API_BASE only when API is on a different host.
+  return window.location.origin;
 }
 
 export const API_BASE = resolveApiBase();
@@ -14,12 +11,7 @@ export function getWsBase(): string {
   const configured = import.meta.env.VITE_WS_BASE;
   if (configured) return configured;
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const port = window.location.port;
-  if (!port || port === "443" || port === "80") {
-    return `${protocol}://${window.location.hostname}`;
-  }
-  const backendPort = import.meta.env.VITE_BACKEND_PORT || (Number(port) - 1) || "1930";
-  return `${protocol}://${window.location.hostname}:${backendPort}`;
+  return `${protocol}://${window.location.host}`;
 }
 
 function getApiKey(): string {
@@ -27,18 +19,16 @@ function getApiKey(): string {
 }
 
 export async function validateApiKey(key: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/api/keys/test`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.valid === true;
-  } catch {
-    return false;
+  const res = await fetch(`${API_BASE}/api/keys/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: key.trim() }),
+  });
+  if (!res.ok) {
+    throw new Error(`Server returned ${res.status}. Is backend running on port 1930?`);
   }
+  const data = await res.json();
+  return data.valid === true;
 }
 
 export function isAuthenticated(): boolean {
@@ -449,6 +439,39 @@ export async function importGrokCliAccounts(payload: { accounts?: any[]; text?: 
   return fetchApi(`/api/accounts/grok-cli/import`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export type GrokFarmStatus = {
+  running: boolean;
+  target: number;
+  concurrent: number;
+  success: number;
+  failed: number;
+  pushFailures: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  batchDir: string | null;
+  lastMessage: string;
+  error: string | null;
+  pid: number | null;
+};
+
+export async function fetchGrokFarmStatus() {
+  return fetchApi(`/api/accounts/grok-cli/farm`);
+}
+
+export async function startGrokFarm(payload: { count: number; concurrent?: number }) {
+  return fetchApi(`/api/accounts/grok-cli/farm`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function stopGrokFarm() {
+  return fetchApi(`/api/accounts/grok-cli/farm/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
