@@ -19,6 +19,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   codebuddy: "CodeBuddy",
   "codebuddy-china": "CodeBuddy CN",
   canva: "Canva",
+  "grok-cli": "Grok CLI",
 };
 
 function labelFor(provider: string): string {

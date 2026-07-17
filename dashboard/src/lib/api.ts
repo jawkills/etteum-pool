@@ -445,6 +445,13 @@ export async function importAccounts(text: string, providers: string[], options?
   });
 }
 
+export async function importGrokCliAccounts(payload: { accounts?: any[]; text?: string }) {
+  return fetchApi(`/api/accounts/grok-cli/import`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchAuthQueue() {
   return fetchApi("/api/auth/queue");
 }

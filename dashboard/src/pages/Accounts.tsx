@@ -28,6 +28,7 @@ import {
   fetchWarmupQueue,
   getCodexAuthorize,
   importAccounts,
+  importGrokCliAccounts,
   loginAccounts,
   loginAllAccounts,
   pollCodexOAuthStatus,
@@ -42,7 +43,7 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok-cli";
 
 type ByokFormKey = {
   id?: number;
@@ -62,7 +63,7 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind"];
+const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind", "grok-cli"];
 
 function labelProvider(provider: string) {
   if (provider === "kiro-pro") return "Kiro Pro";
@@ -72,6 +73,7 @@ function labelProvider(provider: string) {
   if (provider === "qoder") return "Qoder";
   if (provider === "gitlab-duo") return "GitLab Duo";
   if (provider === "youmind") return "YouMind";
+  if (provider === "grok-cli") return "Grok CLI";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -106,6 +108,7 @@ export default function Accounts() {
   const [gitlabBusy, setGitlabBusy] = useState(false);
   const [youmindApiKey, setYoumindApiKey] = useState("");
   const [youmindBusy, setYoumindBusy] = useState(false);
+  const [grokCliBusy, setGrokCliBusy] = useState(false);
   const [codebuddyChinaApiKey, setCodebuddyChinaApiKey] = useState("");
   const [codebuddyChinaBulkApiKeys, setCodebuddyChinaBulkApiKeys] = useState("");
   const [codebuddyChinaBusy, setCodebuddyChinaBusy] = useState(false);
@@ -419,6 +422,21 @@ export default function Accounts() {
     finally { setYoumindBusy(false); }
   }
 
+  async function handleGrokCliImport() {
+    if (!bulkText.trim()) { showError(new Error("Paste CPA JSON (object, array, or NDJSON)")); return; }
+    setGrokCliBusy(true);
+    try {
+      const res = await importGrokCliAccounts({ text: bulkText }) as { imported?: number; failed?: number };
+      const imported = res?.imported ?? 0;
+      const failed = res?.failed ?? 0;
+      showSuccess(`Grok CLI import: ${imported} imported, ${failed} failed`);
+      setBulkText("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setGrokCliBusy(false); }
+  }
+
   async function handleCodebuddyChinaApiKeyLogin() {
     const apiKey = codebuddyChinaApiKey.trim();
     if (!apiKey) { showError(new Error("Paste CodeBuddy China API key")); return; }
@@ -663,6 +681,10 @@ export default function Accounts() {
     }
     if (provider === "youmind") {
       setAddMode("pat");
+    }
+    if (provider === "grok-cli") {
+      setAddMode("bulk");
+      setBulkText("");
     }
     setAddDialogProvider(provider);
   }
@@ -1468,6 +1490,8 @@ export default function Accounts() {
                 ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
                 : addDialogProvider === "codebuddy-china"
                 ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
+                : addDialogProvider === "grok-cli"
+                ? "Paste CPA JSON (flat object, nested tokens harvest, array, or NDJSON). Requires email + access_token + refresh_token."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
           </DialogHeader>
@@ -1517,6 +1541,12 @@ export default function Accounts() {
               <button onClick={() => setAddMode("pat")}
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >API Key (sk-ym-...)</button>
+            </div>
+          ) : addDialogProvider === "grok-cli" ? (
+            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+              <button onClick={() => setAddMode("bulk")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Import JSON (CPA)</button>
             </div>
           ) : addDialogProvider === "codebuddy-china" ? (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
@@ -1577,6 +1607,36 @@ export default function Accounts() {
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={youmindBusy}>Cancel</Button>
                 <Button onClick={handleYouMindApiKeyLogin} disabled={youmindBusy}>
                   {youmindBusy ? "Validating..." : "Add Account"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "bulk" && addDialogProvider === "grok-cli" && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-[var(--foreground)]">CPA JSON</label>
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  className="mt-1 w-full h-48 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  placeholder={`// flat
+{"email":"a@x.com","access_token":"...","refresh_token":"...","id_token":"..."}
+
+// nested harvest
+{"email":"b@x.com","tokens":{"access_token":"...","refresh_token":"..."}}
+
+// array or NDJSON lines also OK`}
+                  disabled={grokCliBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Accepts single object, JSON array, or NDJSON. Required: <code>email</code>, <code>access_token</code>, <code>refresh_token</code> (camelCase keys OK). Nested <code>tokens</code> harvest format supported.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={grokCliBusy}>Cancel</Button>
+                <Button onClick={handleGrokCliImport} disabled={grokCliBusy || !bulkText.trim()}>
+                  {grokCliBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Import Accounts"}
                 </Button>
               </div>
             </div>
@@ -1746,8 +1806,8 @@ ck_xyz789ghi012..."
             </div>
           )}
 
-          {/* Bulk mode (all providers) */}
-          {addMode === "bulk" && (
+          {/* Bulk mode (all providers except grok-cli JSON import) */}
+          {addMode === "bulk" && addDialogProvider !== "grok-cli" && (
             <div className="space-y-4">
               {addDialogProvider === "gitlab-duo" && (
                 <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">

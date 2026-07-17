@@ -21,7 +21,7 @@ import {
   warmupAllAccounts,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "grok-cli";
 type Status = "active" | "exhausted" | "error" | "pending" | "disabled";
 
 interface CodexQuotaWindow {
@@ -108,6 +108,7 @@ const statusVariants: Record<string, "success" | "warning" | "error" | "secondar
 function labelProvider(provider: string) {
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
+  if (provider === "grok-cli") return "Grok CLI";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 

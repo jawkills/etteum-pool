@@ -61,6 +61,7 @@ function getStatusColor(status: string): "success" | "warning" | "error" {
 function labelProvider(provider: string) {
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
+  if (provider === "grok-cli") return "Grok CLI";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
