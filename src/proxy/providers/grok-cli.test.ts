@@ -4,7 +4,10 @@ import {
   grokCliOwnsModel,
   buildGrokCliHeaders,
   classifyGrokCliError,
+  parseGrokCliModelId,
+  resolveGrokCliUpstreamModel,
   GROK_CLI_TOKEN_LIMIT,
+  GROK_CLI_CATALOG_IDS,
 } from "./grok-cli";
 
 describe("normalizeGrokCliCpa", () => {
@@ -58,7 +61,13 @@ describe("normalizeGrokCliCpa", () => {
 });
 
 describe("grokCliOwnsModel", () => {
-  test("owns grok-4.5", () => {
+  test("owns gcli catalog ids", () => {
+    expect(grokCliOwnsModel("gcli/grok-4.5")).toBe(true);
+    expect(grokCliOwnsModel("gcli/grok-4.5-high")).toBe(true);
+    expect(grokCliOwnsModel("gcli/grok-4.5-medium")).toBe(true);
+    expect(grokCliOwnsModel("gcli/grok-4.5-low")).toBe(true);
+  });
+  test("owns bare grok-4.5 compat", () => {
     expect(grokCliOwnsModel("grok-4.5")).toBe(true);
   });
   test("owns prefixed grok-cli-grok-4.5", () => {
@@ -67,6 +76,23 @@ describe("grokCliOwnsModel", () => {
   test("does not own claude/gpt ids", () => {
     expect(grokCliOwnsModel("claude-sonnet-4.6")).toBe(false);
     expect(grokCliOwnsModel("gpt-4o")).toBe(false);
+  });
+});
+
+describe("parseGrokCliModelId", () => {
+  test("maps gcli effort aliases to grok-4.5 + effort", () => {
+    expect(parseGrokCliModelId("gcli/grok-4.5")).toEqual({
+      upstream: "grok-4.5",
+      effort: null,
+      bare: "grok-4.5",
+    });
+    expect(parseGrokCliModelId("gcli/grok-4.5-high").effort).toBe("high");
+    expect(parseGrokCliModelId("gcli/grok-4.5-medium").effort).toBe("medium");
+    expect(parseGrokCliModelId("gcli/grok-4.5-low").effort).toBe("low");
+    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-high")).toBe("grok-4.5");
+  });
+  test("catalog has 4 models", () => {
+    expect(GROK_CLI_CATALOG_IDS).toHaveLength(4);
   });
 });
 

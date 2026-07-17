@@ -96,21 +96,71 @@ export function normalizeGrokCliCpa(input: any): GrokCliNormalized {
   };
 }
 
+export type GrokCliEffort = "low" | "medium" | "high" | null;
+
+/** Catalog IDs exposed on /v1/models (9router-style gcli/* effort aliases). */
+export const GROK_CLI_CATALOG_IDS = [
+  "gcli/grok-4.5",
+  "gcli/grok-4.5-high",
+  "gcli/grok-4.5-medium",
+  "gcli/grok-4.5-low",
+] as const;
+
+/**
+ * Map client model id → upstream model + optional reasoning effort.
+ * All gcli/grok-4.5* aliases hit the same xAI model; effort suffixes only set reasoning_effort.
+ */
+export function parseGrokCliModelId(model: string): {
+  upstream: string;
+  effort: GrokCliEffort;
+  bare: string;
+} {
+  let m = model.trim();
+  const lower = m.toLowerCase();
+  if (lower.startsWith("gcli/")) m = m.slice("gcli/".length);
+  else if (lower.startsWith("grok-cli/")) m = m.slice("grok-cli/".length);
+  else if (lower.startsWith("grok-cli-")) m = m.slice("grok-cli-".length);
+
+  const bareLower = m.toLowerCase();
+  let effort: GrokCliEffort = null;
+  let bare = m;
+  if (bareLower.endsWith("-high")) {
+    effort = "high";
+    bare = m.slice(0, -"-high".length);
+  } else if (bareLower.endsWith("-medium")) {
+    effort = "medium";
+    bare = m.slice(0, -"-medium".length);
+  } else if (bareLower.endsWith("-low")) {
+    effort = "low";
+    bare = m.slice(0, -"-low".length);
+  }
+
+  // Single physical upstream model for this provider catalog
+  const upstream = "grok-4.5";
+  return { upstream, effort, bare: bare || upstream };
+}
+
 export function resolveGrokCliUpstreamModel(model: string): string {
-  const m = model.trim();
-  if (m.toLowerCase().startsWith("grok-cli-")) return m.slice("grok-cli-".length);
-  return m;
+  return parseGrokCliModelId(model).upstream;
 }
 
 export function grokCliOwnsModel(model: string): boolean {
   const m = model.trim().toLowerCase();
-  if (m === "grok-4.5") return true;
-  if (m.startsWith("grok-cli-")) {
-    const up = m.slice("grok-cli-".length);
-    return up === "grok-4.5" || up.startsWith("grok-");
+  // 9router-style catalog
+  if (m === "gcli/grok-4.5" || m === "gcli/grok-4.5-high" || m === "gcli/grok-4.5-medium" || m === "gcli/grok-4.5-low") {
+    return true;
   }
-  // bare grok-4* for CLI catalog; avoid stealing unrelated models
-  return m === "grok-4.5" || m.startsWith("grok-4");
+  if (m.startsWith("gcli/")) {
+    const rest = m.slice("gcli/".length);
+    return rest === "grok-4.5" || rest.startsWith("grok-4.5-") || rest === "grok-build" || rest.startsWith("grok-4");
+  }
+  // bare + legacy prefixes (compat with early etteum clients)
+  if (m === "grok-4.5" || m.startsWith("grok-4.5-") || m.startsWith("grok-4")) return true;
+  if (m.startsWith("grok-cli/") || m.startsWith("grok-cli-")) {
+    const rest = m.startsWith("grok-cli/") ? m.slice("grok-cli/".length) : m.slice("grok-cli-".length);
+    return rest === "grok-4.5" || rest.startsWith("grok-4.5-") || rest.startsWith("grok-");
+  }
+  return false;
 }
 
 export function buildGrokCliHeaders(
@@ -203,22 +253,35 @@ export class GrokCliProvider extends BaseProvider {
 
   private refreshLocks = new Map<number, Promise<RefreshResult>>();
 
-  supportedModels: ModelInfo[] = [
-    {
-      id: "grok-4.5",
-      object: "model",
-      created: Date.now(),
-      owned_by: "grok-cli",
-      context_window: 256000,
-      max_output: 16000,
-      creditUnit: "token",
-      creditRate: 1,
-      creditSource: "estimated",
-    },
-  ];
+  supportedModels: ModelInfo[] = GROK_CLI_CATALOG_IDS.map((id) => ({
+    id,
+    object: "model" as const,
+    created: Date.now(),
+    owned_by: "grok-cli",
+    context_window: 256000,
+    max_output: 16000,
+    thinking: id !== "gcli/grok-4.5",
+    creditUnit: "token" as const,
+    creditRate: 1,
+    creditSource: "estimated" as const,
+  }));
 
   override ownsModel(model: string): boolean {
     return grokCliOwnsModel(model);
+  }
+
+  override getModelInfo(model: string): ModelInfo | undefined {
+    const m = model.trim().toLowerCase();
+    const exact = this.supportedModels.find((item) => item.id.toLowerCase() === m);
+    if (exact) return exact;
+    // bare grok-4.5 / legacy → default catalog entry
+    if (m === "grok-4.5" || m === "gcli/grok-4.5") {
+      return this.supportedModels.find((item) => item.id === "gcli/grok-4.5");
+    }
+    if (m.endsWith("-high")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-high");
+    if (m.endsWith("-medium")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-medium");
+    if (m.endsWith("-low")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-low");
+    return super.getModelInfo(model);
   }
 
   private getTokens(account: Account): GrokCliTokens | null {
@@ -269,8 +332,17 @@ export class GrokCliProvider extends BaseProvider {
     if (!tokens?.access_token) throw new Error("No access_token for grok-cli account");
 
     const req = this.stripUnsupportedTools(request);
-    const model = resolveGrokCliUpstreamModel(req.model);
-    const body = { ...req, model, stream: !!req.stream };
+    const parsed = parseGrokCliModelId(req.model);
+    const model = parsed.upstream;
+    const body: Record<string, unknown> = {
+      ...req,
+      model,
+      stream: !!req.stream,
+    };
+    // Effort aliases set reasoning_effort unless client already sent one
+    if (parsed.effort && body.reasoning_effort == null && (body as any).reasoningEffort == null) {
+      body.reasoning_effort = parsed.effort;
+    }
 
     const response = await this.fetchWithTimeout(
       `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
