@@ -31,25 +31,26 @@ interface ProcessLog {
 
 const liveTypes: string[] = [
   "queue_added", "queue_processing", "login_progress", "login_success", "login_failed", "queue_complete", "queue_cleared",
+  "grok_farm_started", "grok_farm_progress", "grok_farm_success", "grok_farm_failed", "grok_farm_complete",
 ];
-// Note: warmup_* events are explicitly filtered out - Login Logs only shows login operations
+// Note: warmup_* events are explicitly filtered out - Login Logs shows login + grok farm
 
 function statusVariant(type: string): "success" | "warning" | "error" | "secondary" {
-  if (type.includes("success") || type === "queue_complete" || type === "warmup_complete") return "success";
+  if (type.includes("success") || type === "queue_complete" || type === "warmup_complete" || type === "grok_farm_complete") return "success";
   if (type.includes("failed") || type.includes("auth_error")) return "error";
-  if (type.includes("processing") || type.includes("progress") || type.includes("exhausted") || type.includes("transient") || type.includes("unsupported")) return "warning";
+  if (type.includes("processing") || type.includes("progress") || type.includes("exhausted") || type.includes("transient") || type.includes("unsupported") || type === "grok_farm_started") return "warning";
   return "secondary";
 }
 
 function processStatusVariant(process: ProcessLog): "success" | "warning" | "error" | "secondary" {
-  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success")) return "success";
-  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error")) return "error";
+  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success" || log.type === "grok_farm_success" || log.type === "grok_farm_complete")) return "success";
+  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error" || log.type === "grok_farm_failed")) return "error";
   return statusVariant(process.latest.type);
 }
 
 function processStatusLabel(process: ProcessLog) {
-  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success")) return "success";
-  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error")) return "error";
+  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success" || log.type === "grok_farm_success" || log.type === "grok_farm_complete")) return "success";
+  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error" || log.type === "grok_farm_failed")) return "error";
   return statusLabel(process.latest.type);
 }
 
@@ -57,20 +58,33 @@ function providerLabel(provider?: string) {
   if (!provider) return "-";
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
+  if (provider === "grok-cli") return "Grok CLI";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
 function operationFor(type: string) {
-  return type.startsWith("warmup_") ? "WarmUp" : "Login";
+  if (type.startsWith("warmup_")) return "WarmUp";
+  if (type.startsWith("grok_farm_")) return "Grok Farm";
+  return "Login";
 }
 
 function processKey(log: AuthLog) {
+  if (log.type.startsWith("grok_farm_")) {
+    // Group farm job-level events together; per-email when available
+    if (log.email) return `Grok Farm-${log.email}`;
+    return "Grok Farm-job";
+  }
   const account = log.accountId || log.email || log.id;
   return `${operationFor(log.type)}-${account}`;
 }
 
 function statusLabel(type: string) {
-  return type.replace(/^login_/, "").replace(/^warmup_/, "").replace(/^queue_/, "").replace(/_/g, " ");
+  return type
+    .replace(/^login_/, "")
+    .replace(/^warmup_/, "")
+    .replace(/^queue_/, "")
+    .replace(/^grok_farm_/, "")
+    .replace(/_/g, " ");
 }
 
 function mergeLogs(current: AuthLog[], incoming: AuthLog[]) {
@@ -127,8 +141,15 @@ export default function BotLogs() {
       fetchAuthLogs(300) as Promise<{ data: AuthLog[] }>,
       fetchAuthQueue().catch(() => null),
     ]);
-    // Filter out all warmup logs - Login Logs only shows login operations
-    setLogs((current) => mergeLogs(current, (logRes.data || []).filter((log) => !log.type.startsWith("warmup_"))));
+    // Filter warmup; keep login + grok farm automation logs
+    setLogs((current) =>
+      mergeLogs(
+        current,
+        (logRes.data || []).filter(
+          (log) => !log.type.startsWith("warmup_")
+        )
+      )
+    );
     setQueue(queueRes);
   }
 
@@ -156,7 +177,7 @@ export default function BotLogs() {
   }, []);
 
   useWsEvent(liveTypes, (msg) => {
-    // Skip all warmup events - Login Logs only shows login operations
+    // Skip warmup events
     if (msg.type.startsWith("warmup_")) return;
 
     if (msg.type === "queue_complete") {
@@ -172,7 +193,7 @@ export default function BotLogs() {
       type: msg.type,
       accountId: data.accountId || data.id,
       email: data.email,
-      provider: data.provider,
+      provider: data.provider || (msg.type.startsWith("grok_farm_") ? "grok-cli" : undefined),
       step: data.step,
       message: data.message || data.error || msg.type,
       error: data.error,
@@ -182,7 +203,10 @@ export default function BotLogs() {
     scheduleQueueRefresh();
   });
 
-  const failed = useMemo(() => logs.filter((log) => log.type === "login_failed"), [logs]);
+  const failed = useMemo(
+    () => logs.filter((log) => log.type === "login_failed" || log.type === "grok_farm_failed"),
+    [logs]
+  );
   const failedAccounts = useMemo(() => {
     const map = new Map<string, AuthLog>();
     for (const log of failed) {
@@ -243,7 +267,7 @@ export default function BotLogs() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--foreground)]">Login Logs</h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Live progress for auto-login bot, including failed accounts.
+            Live progress for auto-login bot and Grok CLI farm, including failed accounts.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

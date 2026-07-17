@@ -297,17 +297,34 @@ export default function Accounts() {
     setByokProviders(byokRes.providers || []);
   });
 
-  useWsEvent(["grok_farm_status", "grok_farm_started", "grok_farm_complete"], (msg) => {
-    if (msg.data) setFarmStatus(msg.data as GrokFarmStatus);
-    if (msg.type === "grok_farm_complete") {
-      load().catch(() => {});
+  useWsEvent(
+    ["grok_farm_status", "grok_farm_started", "grok_farm_complete", "grok_farm_progress", "grok_farm_success", "grok_farm_failed"],
+    (msg) => {
+      // Status broadcasts carry full GrokFarmStatus; progress events may only have log payload
+      if (msg.type === "grok_farm_status" || msg.type === "grok_farm_started" || msg.type === "grok_farm_complete") {
+        if (msg.data && typeof (msg.data as any).running === "boolean") {
+          setFarmStatus(msg.data as GrokFarmStatus);
+        }
+      }
+      if (msg.type === "grok_farm_complete" || msg.type === "grok_farm_success") {
+        load().catch(() => {});
+      }
     }
-  });
+  );
 
   useEffect(() => {
+    // Always poll while farm running (banner); also while Grok dialog open
     const dialogOpen = addDialogProvider === "grok-cli";
     const running = farmStatus?.running === true;
-    if (!dialogOpen && !running) return;
+    if (!dialogOpen && !running) {
+      // one-shot fetch on mount for residual status
+      if (!farmStatus) {
+        fetchGrokFarmStatus()
+          .then((res: any) => { if (res?.data) setFarmStatus(res.data); })
+          .catch(() => {});
+      }
+      return;
+    }
     let cancelled = false;
     const poll = async () => {
       try {
@@ -479,7 +496,9 @@ export default function Accounts() {
     try {
       const res = await startGrokFarm({ count, concurrent }) as { data?: GrokFarmStatus };
       if (res?.data) setFarmStatus(res.data);
-      showSuccess("Grok farm started");
+      showSuccess("Grok farm started — progress in Bot Logs");
+      setAddDialogProvider(null);
+      navigate("/bot-logs");
     } catch (err) { showError(err); }
     finally { setFarmBusy(false); }
   }
@@ -1062,10 +1081,40 @@ export default function Accounts() {
         </div>
       )}
 
-      {/* Queue status - Login only */}
+      {/* Queue status - Login */}
       {(Number(queue?.active || 0) > 0 || Number(queue?.queued || 0) > 0) && (
         <div className="rounded-md border border-[var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted-foreground)]">
           Login: {Number(queue?.active || 0)} running, {Number(queue?.queued || 0)} queued
+        </div>
+      )}
+
+      {/* Grok farm banner — same surface as login queue */}
+      {farmStatus?.running && (
+        <div className="rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3 text-xs text-[var(--foreground)] space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              <strong>Grok Farm</strong>
+              {" · "}
+              {farmStatus.success}/{farmStatus.target} ok
+              {farmStatus.failed > 0 ? ` · ${farmStatus.failed} fail` : ""}
+              {farmStatus.concurrent > 0 ? ` · conc ${farmStatus.concurrent}` : ""}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => navigate("/bot-logs")}
+            >
+              Open Bot Logs
+            </Button>
+          </div>
+          <Progress
+            value={farmStatus.target > 0 ? Math.round(((farmStatus.success + farmStatus.failed) / farmStatus.target) * 100) : 0}
+            className="h-2"
+          />
+          {farmStatus.lastMessage && (
+            <p className="text-[var(--muted-foreground)] font-mono truncate">{farmStatus.lastMessage}</p>
+          )}
         </div>
       )}
 
@@ -1129,6 +1178,23 @@ export default function Accounts() {
                   </div>
                   <Progress
                     value={warmupProgress[stat.provider].total > 0 ? Math.round((warmupProgress[stat.provider].completed / warmupProgress[stat.provider].total) * 100) : 0}
+                    className="h-2"
+                  />
+                </div>
+              )}
+
+              {/* Grok farm progress on card */}
+              {stat.provider === "grok-cli" && farmStatus?.running && farmStatus.target > 0 && (
+                <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-[var(--muted-foreground)]">Farm</span>
+                    <span className="text-[var(--foreground)]">
+                      {farmStatus.success + farmStatus.failed} / {farmStatus.target}
+                      {farmStatus.failed > 0 ? ` (${farmStatus.failed} fail)` : ""}
+                    </span>
+                  </div>
+                  <Progress
+                    value={Math.round(((farmStatus.success + farmStatus.failed) / farmStatus.target) * 100)}
                     className="h-2"
                   />
                 </div>
@@ -1675,9 +1741,10 @@ export default function Accounts() {
 
           {addDialogProvider === "grok-cli" && grokMode === "farm" && (
             <div className="space-y-4">
-              <p className="text-xs text-[var(--muted-foreground)]">
-                HTTP farm (no browser). Needs Boterdrop :8000 + tempmail. Auto-imports to pool.
-              </p>
+              <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
+                <div><strong>HTTP farm automation</strong> (no browser). Same observability as Login: progress goes to <strong>Bot Logs</strong>.</div>
+                <div className="text-[var(--muted-foreground)]">Needs Boterdrop :8000 + tempmail. Each success auto-imports into the Grok CLI pool.</div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-sm text-[var(--foreground)]">Count</label>
@@ -1704,30 +1771,41 @@ export default function Accounts() {
                   />
                 </div>
               </div>
-              {farmStatus && (
-                <div className="rounded-md border border-[var(--border)] bg-[var(--secondary)]/40 p-3 space-y-1 text-xs font-mono">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <span>running: <strong>{farmStatus.running ? "yes" : "no"}</strong></span>
-                    <span>ok/fail/target: <strong>{farmStatus.success}/{farmStatus.failed}/{farmStatus.target}</strong></span>
-                    {farmStatus.pushFailures > 0 && (
-                      <span className="text-amber-500">pushFailures: {farmStatus.pushFailures}</span>
-                    )}
+              {farmStatus && (farmStatus.running || farmStatus.target > 0) && (
+                <div className="space-y-2 rounded-md border border-[var(--border)] bg-[var(--secondary)]/40 p-3">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-[var(--muted-foreground)]">
+                      {farmStatus.running ? "Running" : "Last run"}
+                    </span>
+                    <span className="text-[var(--foreground)] font-medium">
+                      {farmStatus.success} ok · {farmStatus.failed} fail · {farmStatus.target} target
+                    </span>
                   </div>
+                  <Progress
+                    value={
+                      farmStatus.target > 0
+                        ? Math.round(((farmStatus.success + farmStatus.failed) / farmStatus.target) * 100)
+                        : 0
+                    }
+                    className="h-2"
+                  />
                   {farmStatus.lastMessage && (
-                    <div className="text-[var(--muted-foreground)] break-all">last: {farmStatus.lastMessage}</div>
+                    <p className="text-xs font-mono text-[var(--muted-foreground)] break-all">{farmStatus.lastMessage}</p>
                   )}
                   {farmStatus.error && (
-                    <div className="text-red-500 break-all">error: {farmStatus.error}</div>
-                  )}
-                  {farmStatus.batchDir && (
-                    <div className="text-[var(--muted-foreground)] break-all">batch: {farmStatus.batchDir}</div>
+                    <p className="text-xs text-red-500 break-all">{farmStatus.error}</p>
                   )}
                 </div>
               )}
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={farmBusy}>
-                  Close
+                  Cancel
                 </Button>
+                {farmStatus?.running && (
+                  <Button variant="outline" onClick={() => navigate("/bot-logs")}>
+                    Bot Logs
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   onClick={handleGrokFarmStop}
@@ -1738,7 +1816,7 @@ export default function Accounts() {
                 <Button onClick={handleGrokFarmStart} disabled={farmBusy || farmStatus?.running}>
                   {farmBusy || farmStatus?.running
                     ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {farmStatus?.running ? "Running..." : "Starting..."}</>)
-                    : "Start"}
+                    : "Start Farm"}
                 </Button>
               </div>
             </div>
