@@ -82,8 +82,9 @@ describe("buildGrokCliHeaders", () => {
       "grok-4.5"
     );
     expect(h.Authorization).toBe("Bearer tok");
-    expect(h["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
+    // single auth header only — Bun merges duplicate case variants into comma list
     expect(h["x-xai-token-auth"]).toBe("xai-grok-cli");
+    expect(h["X-XAI-Token-Auth"]).toBeUndefined();
     expect(h["x-grok-model-override"]).toBe("grok-4.5");
     expect(h["x-email"]).toBe("a@x.com");
     expect(h["x-teamid"]).toBe("t1");

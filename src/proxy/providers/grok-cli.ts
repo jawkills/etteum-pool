@@ -119,12 +119,15 @@ export function buildGrokCliHeaders(
   clientVersion = GROK_CLI_CLIENT_VERSION
 ): Record<string, string> {
   const ver = clientVersion;
+  // Bun/fetch Headers merges case-insensitive keys into a comma list.
+  // Sending both X-XAI-Token-Auth and x-xai-token-auth becomes
+  // "xai-grok-cli, xai-grok-cli" → upstream reports x_xai_token_auth=unknown.
+  // One header is enough (HTTP headers are case-insensitive).
   const h: Record<string, string> = {
     Authorization: `Bearer ${tokens.access_token}`,
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent": `grok-pager/${ver} grok-shell/${ver} (linux; x86_64)`,
-    "X-XAI-Token-Auth": "xai-grok-cli",
     "x-xai-token-auth": "xai-grok-cli",
     "x-grok-client-identifier": GROK_CLI_CLIENT_IDENTIFIER,
     "x-grok-client-version": ver,
@@ -162,18 +165,32 @@ export function classifyGrokCliError(status: number, body: string): GrokCliError
   return null;
 }
 
+/** Parse expires_at from unix sec/ms or ISO-8601 string. */
+export function parseGrokCliExpiresAt(raw: string | number | undefined | null): number | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    return raw > 1e12 ? Math.floor(raw / 1000) : raw;
+  }
+  const s = String(raw).trim();
+  if (!s) return null;
+  const asNum = Number(s);
+  if (Number.isFinite(asNum) && asNum > 0) {
+    return asNum > 1e12 ? Math.floor(asNum / 1000) : asNum;
+  }
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor(ms / 1000);
+}
+
 /** True if access token should be refreshed before calling upstream. */
 export function grokCliNeedsProactiveRefresh(
   tokens: GrokCliTokens,
   leadSec = GROK_CLI_REFRESH_LEAD_SEC,
   nowSec = Math.floor(Date.now() / 1000)
 ): boolean {
-  const raw = tokens.expires_at;
-  if (raw == null || raw === "") return false; // unknown expiry: rely on 401 path
-  const exp = typeof raw === "number" ? raw : Number(raw);
-  if (!Number.isFinite(exp) || exp <= 0) return false;
-  // support both unix seconds and ms
-  const expSec = exp > 1e12 ? Math.floor(exp / 1000) : exp;
+  const expSec = parseGrokCliExpiresAt(tokens.expires_at);
+  if (expSec == null) return false; // unknown expiry: rely on 401 path
   return expSec - nowSec < leadSec;
 }
 
