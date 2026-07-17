@@ -422,6 +422,53 @@ install_node_deps() {
   ok "JS dependencies installed"
 }
 
+setup_grok_farm_venv() {
+  # In-tree Grok HTTP farm (no browser). External runtime dep: Boterdrop only.
+  local venv_dir="scripts/grok-farm/.venv"
+  local pip="$venv_dir/bin/pip"
+  local venv_python="$venv_dir/bin/python"
+  local req="scripts/grok-farm/requirements.txt"
+  local env_example="scripts/grok-farm/.env.example"
+  local env_file="scripts/grok-farm/.env"
+
+  if [[ ! -f "$req" ]]; then
+    warn "scripts/grok-farm not found - skipping Grok farm venv"
+    return
+  fi
+
+  step "Setting up Grok HTTP farm venv at $venv_dir"
+  ensure_venv_module
+
+  if [[ ! -d "$venv_dir" ]]; then
+    info "Creating Grok farm virtual environment..."
+    if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
+      warn "Failed to create Grok farm venv (Farm UI needs system Python + curl_cffi, or re-run installer)"
+      return
+    fi
+  fi
+
+  if [[ ! -f "$venv_python" || ! -f "$pip" ]]; then
+    warn "Grok farm venv incomplete - missing python/pip"
+    return
+  fi
+
+  info "Installing Grok farm Python packages (curl_cffi, requests)..."
+  retry "$pip" install --upgrade pip wheel >/dev/null 2>&1 || true
+  if ! retry "$pip" install -r "$req"; then
+    warn "Grok farm pip install failed. Manual: $pip install -r $req"
+    return
+  fi
+  ok "Grok farm Python deps installed"
+
+  if [[ ! -f "$env_file" && -f "$env_example" ]]; then
+    cp "$env_example" "$env_file"
+    warn "Created scripts/grok-farm/.env from example - set GROK_TEMPMAIL_API_KEY (+ Boterdrop URL)"
+    info "  External only: Boterdrop solver at BOTERDROP_URL (default http://127.0.0.1:8000)"
+  fi
+
+  chmod +x scripts/grok-farm/run-http.sh 2>/dev/null || true
+}
+
 setup_python_venv() {
   local venv_dir="scripts/auth/.venv"
   local pip="$venv_dir/bin/pip"
@@ -560,6 +607,7 @@ main() {
   write_env_if_missing
   install_node_deps
   setup_python_venv
+  setup_grok_farm_venv
   build_dashboard
   run_migrations
   install_cli_symlink
@@ -579,6 +627,11 @@ ${C_BOLD}Quick Start:${C_RESET}
      ${C_CYAN}http://localhost:1931${C_RESET}
 
   3. Add accounts via the dashboard UI (or bring your own keys via BYOK)
+
+  Grok CLI Farm (optional HTTP automation):
+     - In-tree: scripts/grok-farm (venv installed by this installer)
+     - External only: Boterdrop solver (BOTERDROP_URL in scripts/grok-farm/.env)
+     - Dashboard: Accounts -> Grok CLI -> Farm
 
 ${C_BOLD}Useful Commands:${C_RESET}
 

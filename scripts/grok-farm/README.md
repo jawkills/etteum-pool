@@ -1,21 +1,40 @@
 # Grok HTTP farm (in-tree)
 
-HTTP-only xAI Grok CLI account farmer. **Lives inside etteum-pool** — no dependency on folders outside the repo.
+HTTP-only xAI Grok CLI account farmer. **Ships inside etteum-pool** — no path outside the repo.
 
-**External only:** Boterdrop solver (`BOTERDROP_URL`, default `http://127.0.0.1:8000`).
+## After `git clone` / installer
 
-## Setup
+The main installer (`install.sh` / `install.ps1`) automatically:
+
+1. Creates `scripts/grok-farm/.venv`
+2. Installs `requirements.txt` (`curl_cffi`, `requests`, `python-dotenv`)
+3. Copies `.env.example` → `.env` if missing
+
+You only need to:
+
+1. **Edit** `scripts/grok-farm/.env` — set `GROK_TEMPMAIL_API_KEY` (and password if desired)
+2. **Run Boterdrop** externally at `BOTERDROP_URL` (default `http://127.0.0.1:8000`)
+3. Start etteum → **Accounts → Grok CLI → Farm**
+
+## External dependency (only)
+
+| Service | Env | Notes |
+|---------|-----|--------|
+| Boterdrop solver | `BOTERDROP_URL` | CF clearance + Turnstile — **not** bundled |
+
+Everything else (farm code, push to etteum, OAuth) is in this package.
+
+## Manual setup (if installer skipped)
 
 ```bash
 cd scripts/grok-farm
-python -m venv .venv
+python3 -m venv .venv
 # Windows: .venv\Scripts\pip install -r requirements.txt
 # Linux:   .venv/bin/pip install -r requirements.txt
-cp .env.example .env
-# edit .env — tempmail key, optional proxies.txt
+cp .env.example .env   # then edit secrets
 ```
 
-## Run (CLI)
+## CLI (optional)
 
 ```bash
 # Windows
@@ -25,13 +44,14 @@ cp .env.example .env
 ./run-http.sh -n 5 -c 2 -y
 ```
 
-Dashboard: **Accounts → Grok CLI → Farm** spawns `http_farm.py` from this directory and pushes into the pool.
+Dashboard injects `ETTEUM_URL` + `ETTEUM_API_KEY` and forces `--push` so accounts land in the pool.
 
 ## Layout
 
-| File | Role |
+| Path | Role |
 |------|------|
 | `http_farm.py` | Signup + OAuth + batch |
-| `etteum_push.py` | Import client to etteum |
-| `requirements.txt` | curl_cffi, requests, dotenv (no browser) |
-| `results/` | batch_* outputs (gitignored) |
+| `etteum_push.py` | Import client |
+| `requirements.txt` | HTTP deps only (no browser) |
+| `.env` | Secrets (gitignored) |
+| `results/` | Batch output (gitignored) |

@@ -156,6 +156,23 @@ etteum help               # Full command reference
    - **Instant Login** — refresh tokens (Kiro Pro, Codex)
    - **PAT Token** — Personal Access Token (Qoder)
    - **API Key** — for `byok` and `codebuddy-china` providers
+   - **Grok CLI Farm** — HTTP automation (no browser) via in-tree `scripts/grok-farm`
+   - **Grok CLI Import JSON** — paste CPA tokens if you already have them
+
+### Grok CLI Farm (share-ready)
+
+Farm code lives **in the repo** at `scripts/grok-farm` (installer creates its venv).
+
+**External only:** [Boterdrop](https://github.com/) (or compatible) Turnstile/cf_clearance solver — set `BOTERDROP_URL` in `scripts/grok-farm/.env` (default `http://127.0.0.1:8000`).
+
+After install:
+
+1. Edit `scripts/grok-farm/.env` → `GROK_TEMPMAIL_API_KEY=...`
+2. Start Boterdrop on the configured URL
+3. Dashboard → **Accounts** → **Grok CLI** → **Farm** → Start  
+   Progress appears on **Bot Logs**; accounts auto-import into the pool.
+
+Optional CLI: `cd scripts/grok-farm && ./run-http.sh -n 5 -c 2 -y` (Windows: `.\run-http.ps1`).
 
 ### Auto-warmup
 

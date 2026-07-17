@@ -384,6 +384,55 @@ function Install-NodeDeps {
     Ok "JS dependencies installed"
 }
 
+function Setup-GrokFarmVenv {
+    # In-tree Grok HTTP farm (no browser). Only external runtime dep is Boterdrop solver.
+    $venv = Join-Path (Join-Path "scripts" "grok-farm") ".venv"
+    $venvPip = Join-Path (Join-Path $venv "Scripts") "pip.exe"
+    $venvPy  = Join-Path (Join-Path $venv "Scripts") "python.exe"
+    $req = Join-Path (Join-Path "scripts" "grok-farm") "requirements.txt"
+    $envExample = Join-Path (Join-Path "scripts" "grok-farm") ".env.example"
+    $envFile = Join-Path (Join-Path "scripts" "grok-farm") ".env"
+
+    if (-not (Test-Path $req)) {
+        Warn "scripts/grok-farm not found - skipping Grok farm venv"
+        return
+    }
+
+    Step "Setting up Grok HTTP farm venv at $venv"
+
+    if (-not (Test-Path $venv)) {
+        Info "Creating Grok farm virtual environment..."
+        & $script:PythonBin -m venv $venv
+        if ($LASTEXITCODE -ne 0) {
+            Warn "Failed to create Grok farm venv (Grok Farm UI will need system Python + curl_cffi)"
+            return
+        }
+    }
+
+    if (-not (Test-Path $venvPy)) {
+        Warn "Grok farm venv incomplete - missing $venvPy"
+        return
+    }
+
+    Info "Installing Grok farm Python packages (curl_cffi, requests)..."
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $venvPy -m pip install --upgrade pip wheel 2>&1 | Out-Null
+    $ErrorActionPreference = $prevEap
+    Retry-Action -Action { & $venvPy -m pip install -r $req }
+    if ($LASTEXITCODE -ne 0) {
+        Warn "Grok farm pip install failed. Manual: $venvPip install -r $req"
+        return
+    }
+    Ok "Grok farm Python deps installed"
+
+    if ((-not (Test-Path $envFile)) -and (Test-Path $envExample)) {
+        Copy-Item $envExample $envFile
+        Warn "Created scripts/grok-farm/.env from example - set GROK_TEMPMAIL_API_KEY (+ Boterdrop URL)"
+        Info "  External only: Boterdrop solver at BOTERDROP_URL (default http://127.0.0.1:8000)"
+    }
+}
+
 function Setup-PythonVenv {
     $venv = Join-Path (Join-Path "scripts" "auth") ".venv"
     $venvPip = Join-Path (Join-Path $venv "Scripts") "pip.exe"
@@ -539,6 +588,7 @@ function Main {
     Write-EnvIfMissing
     Install-NodeDeps
     Setup-PythonVenv
+    Setup-GrokFarmVenv
     Build-Dashboard
     Run-Migrations
     Install-CliShims
@@ -560,6 +610,11 @@ function Main {
     Write-Host "     http://localhost:1931"
     Write-Host ""
     Write-Host "  3. Add accounts via the dashboard UI"
+    Write-Host ""
+    Write-Host "  Grok CLI Farm (optional HTTP automation):" -ForegroundColor Cyan
+    Write-Host "     - In-tree: scripts\grok-farm (venv installed by this installer)"
+    Write-Host "     - External only: Boterdrop solver (BOTERDROP_URL in scripts\grok-farm\.env)"
+    Write-Host "     - Dashboard: Accounts -> Grok CLI -> Farm"
     Write-Host ""
 
     Write-Host "Useful Commands:" -ForegroundColor White -BackgroundColor DarkBlue

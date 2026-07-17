@@ -1,12 +1,17 @@
-# run-http.ps1 — HTTP farm entry (Windows)
+# run-http.ps1 — HTTP farm entry (Windows) — prefers in-tree .venv
 param([Parameter(ValueFromRemainingArguments = $true)]$FarmArgs)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
 if (-not (Test-Path ".env")) {
-  Write-Host "Missing .env — copy .env.example"
-  exit 1
+  if (Test-Path ".env.example") {
+    Copy-Item ".env.example" ".env"
+    Write-Host "Created .env from .env.example — set GROK_TEMPMAIL_API_KEY and BOTERDROP_URL"
+  } else {
+    Write-Host "Missing .env"
+    exit 1
+  }
 }
 
 function Test-PythonHasCurlCffi([string]$exe, [string[]]$prefixArgs) {
@@ -33,8 +38,8 @@ if ((Test-Path ".venv\Scripts\python.exe") -and (Test-PythonHasCurlCffi ".venv\S
   $pyExe = "python"
 } else {
   Write-Host "No Python with curl_cffi found."
-  Write-Host "  Install: py -3 -m pip install curl_cffi requests python-dotenv"
-  Write-Host "  Or: python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt"
+  Write-Host "  Re-run repo install.ps1, or:"
+  Write-Host "  py -3 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt"
   exit 1
 }
 
