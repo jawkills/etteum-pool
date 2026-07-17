@@ -12,6 +12,7 @@ import { pool, type ProviderName } from "../proxy/pool";
 import { activateQoderPat } from "../proxy/providers/qoder";
 import { activateYouMindKey } from "../proxy/providers/youmind";
 import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../proxy/providers/grok-cli";
+import { grokFarmQueue } from "../auth/grok-farm-queue";
 
 export const accountsRouter = new Hono();
 
@@ -1688,6 +1689,31 @@ accountsRouter.post("/grok-cli/import", async (c) => {
   });
 
   return c.json({ imported, failed, results });
+});
+
+/** POST /api/accounts/grok-cli/farm - Start HTTP farm job */
+accountsRouter.post("/grok-cli/farm", async (c) => {
+  const body = await c.req.json<{ count?: number; concurrent?: number }>().catch(() => ({} as any));
+  const count = Number(body.count);
+  if (!Number.isFinite(count) || count < 1) {
+    return c.json({ error: "count >= 1 required" }, 400);
+  }
+  const concurrent = Number(body.concurrent) > 0 ? Number(body.concurrent) : 1;
+  const result = grokFarmQueue.start({ count, concurrent });
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  return c.json({ data: result.status });
+});
+
+/** GET /api/accounts/grok-cli/farm */
+accountsRouter.get("/grok-cli/farm", (c) => {
+  return c.json({ data: grokFarmQueue.getStatus() });
+});
+
+/** POST /api/accounts/grok-cli/farm/stop */
+accountsRouter.post("/grok-cli/farm/stop", (c) => {
+  const result = grokFarmQueue.stop();
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  return c.json({ data: grokFarmQueue.getStatus() });
 });
 
 /**
