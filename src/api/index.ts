@@ -26,7 +26,20 @@ apiRouter.route("/integration", integrationRouter);
 apiRouter.route("/oauth", oauthRouter);
 
 apiRouter.get("/providers", (c) => {
-  return c.json({ data: ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder"] });
+  return c.json({
+    data: [
+      "kiro",
+      "kiro-pro",
+      "codebuddy",
+      "codebuddy-china",
+      "canva",
+      "codex",
+      "qoder",
+      "gitlab-duo",
+      "youmind",
+      "grok-cli",
+    ],
+  });
 });
 
 // Health check
