@@ -368,6 +368,16 @@ write_env_if_missing() {
     fi
   fi
 
+  # Fix AUTH_SCRIPT_PATH double-join: path is relative to AUTH_SCRIPT_CWD
+  if grep -qE '^AUTH_SCRIPT_PATH=.*scripts[/\\]auth[/\\]login\.py' .env 2>/dev/null; then
+    if [[ "$OS" == "macos" ]]; then
+      sed -i '' 's|^AUTH_SCRIPT_PATH=.*|AUTH_SCRIPT_PATH=login.py|' .env
+    else
+      sed -i 's|^AUTH_SCRIPT_PATH=.*|AUTH_SCRIPT_PATH=login.py|' .env
+    fi
+    ok "Normalized AUTH_SCRIPT_PATH=login.py (avoids scripts/auth/scripts/auth/login.py)"
+  fi
+
   # Ensure other required keys exist
   for key_name in PORT DASHBOARD_PORT API_KEY DATABASE_PATH AUTH_SCRIPT_PATH AUTH_SCRIPT_CWD; do
     if ! grep -q "^${key_name}=" .env; then

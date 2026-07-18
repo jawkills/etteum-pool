@@ -339,6 +339,13 @@ function Write-EnvIfMissing {
         }
     }
 
+    # Fix AUTH_SCRIPT_PATH double-join bug: path must be relative to AUTH_SCRIPT_CWD
+    $envContent = Get-Content ".env" -Raw
+    if ($envContent -match '(?m)^AUTH_SCRIPT_PATH=.*scripts[/\\]auth[/\\]login\.py') {
+        (Get-Content ".env") -replace '(?m)^AUTH_SCRIPT_PATH=.*', 'AUTH_SCRIPT_PATH=login.py' | Set-Content ".env"
+        Ok "Normalized AUTH_SCRIPT_PATH=login.py (avoids scripts/auth/scripts/auth/login.py)"
+    }
+
     # Ensure other required keys exist
     $envContent = Get-Content ".env" -Raw
     $requiredKeys = @("PORT", "DASHBOARD_PORT", "API_KEY", "DATABASE_PATH", "AUTH_SCRIPT_PATH", "AUTH_SCRIPT_CWD")
