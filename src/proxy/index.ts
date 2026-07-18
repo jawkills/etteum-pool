@@ -13,7 +13,7 @@ import {
 } from "./transforms/anthropic";
 import { isBadUpstreamRequest, isInvalidModelError } from "./errors";
 import { prepareLogBody } from "./logging";
-import { resolveModelAlias } from "./model-mapping";
+import { normalizeModelId, resolveModelAlias } from "./model-mapping";
 import { eq, sql } from "drizzle-orm";
 import { providerList, refreshByokModels } from "./providers/registry";
 
@@ -95,12 +95,6 @@ export async function recordRequest(entry: NewRequestLog) {
     console.error("[Proxy] Failed to record request:", err);
   }
 }
-
-function normalizeModelId(model: string): string {
-  // Common typo seen from clients: "sonet" -> canonical Anthropic "sonnet".
-  return model.replace(/claude-sonet/gi, "claude-sonnet");
-}
-
 
 function computeCredits(
   provider: keyof typeof providers,

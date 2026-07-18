@@ -1,8 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Cpu, Copy, Check, Search } from "lucide-react";
+import { Cpu, Copy, Check, Search, Zap, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { fetchModels } from "@/lib/api";
+import { fetchModels, testModelConnection } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
 
 interface ModelData {
@@ -32,12 +32,16 @@ function formatNumber(n: number | undefined): string {
   return String(n);
 }
 
+type TestBanner = { kind: "ok" | "err"; text: string };
+
 export default function Models() {
   const [models, setModels] = useState<ModelData[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [testingModel, setTestingModel] = useState<string | null>(null);
   const { message: copiedModel, setMessage: setCopiedModel } = useTimedMessage<string>(null, 1500);
+  const { message: testBanner, setMessage: setTestBanner } = useTimedMessage<TestBanner>(null, 5000);
 
   useEffect(() => {
     fetchModels()
@@ -63,6 +67,24 @@ export default function Models() {
     setCopiedModel(modelId);
   }
 
+  async function handleTestModel(modelId: string) {
+    setTestingModel(modelId);
+    try {
+      const res = await testModelConnection(modelId);
+      if (res.success) {
+        const latency = res.latency_ms != null ? ` · ${res.latency_ms}ms` : "";
+        const provider = res.provider ? ` · ${res.provider}` : "";
+        setTestBanner({ kind: "ok", text: `✓ ${modelId} OK${provider}${latency}` });
+      } else {
+        setTestBanner({ kind: "err", text: res.error || `Connection test failed for ${modelId}` });
+      }
+    } catch (err) {
+      setTestBanner({ kind: "err", text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setTestingModel(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -80,6 +102,12 @@ export default function Models() {
           {models.length} models available across {new Set(models.map((m) => m.owned_by)).size} providers
         </p>
       </div>
+
+      {testBanner && (
+        <div className={`rounded-md p-3 text-sm ${testBanner.kind === "ok" ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
+          {testBanner.text}
+        </div>
+      )}
 
       {/* Search */}
       <Card>
@@ -136,7 +164,7 @@ export default function Models() {
                   <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Features
                   </th>
-                  <th className="w-12"></th>
+                  <th className="w-20"></th>
                 </tr>
               </thead>
               <tbody>
@@ -180,20 +208,35 @@ export default function Models() {
                       )}
                     </td>
 
-                    {/* Copy Button */}
+                    {/* Actions */}
                     <td className="py-3 px-4">
-                      <button
-                        type="button"
-                        onClick={() => copyModelId(model.id)}
-                        title={`Copy model ID: ${model.id}`}
-                        className="p-1.5 rounded-md hover:bg-[var(--secondary)] transition-colors group"
-                      >
-                        {copiedModel === model.id ? (
-                          <Check className="w-4 h-4 text-[var(--success)]" />
-                        ) : (
-                          <Copy className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleTestModel(model.id)}
+                          disabled={testingModel === model.id}
+                          title={`Test connection: ${model.id}`}
+                          className="p-1.5 rounded-md hover:bg-[var(--secondary)] transition-colors group disabled:opacity-50"
+                        >
+                          {testingModel === model.id ? (
+                            <RefreshCw className="w-4 h-4 animate-spin text-[var(--info)]" />
+                          ) : (
+                            <Zap className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--info)]" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyModelId(model.id)}
+                          title={`Copy model ID: ${model.id}`}
+                          className="p-1.5 rounded-md hover:bg-[var(--secondary)] transition-colors group"
+                        >
+                          {copiedModel === model.id ? (
+                            <Check className="w-4 h-4 text-[var(--success)]" />
+                          ) : (
+                            <Copy className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]" />
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

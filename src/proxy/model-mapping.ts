@@ -142,6 +142,11 @@ function isNativeProviderId(model: string): boolean {
   return false;
 }
 
+/** Common typo seen from clients: "sonet" → canonical Anthropic "sonnet". */
+export function normalizeModelId(model: string): string {
+  return model.replace(/claude-sonet/gi, "claude-sonnet");
+}
+
 /**
  * Rewrite an incoming model id to its mapped target, if any. Single pass (no
  * recursive remapping). Returns the original model when mapping is disabled,

@@ -203,6 +203,22 @@ export async function fetchModels() {
   return fetchApi("/v1/models");
 }
 
+export async function testModelConnection(model: string): Promise<{
+  success: boolean;
+  model?: string;
+  provider?: string;
+  account_id?: number;
+  account_email?: string;
+  latency_ms?: number;
+  error?: string;
+}> {
+  return fetchApi("/api/models/test", {
+    method: "POST",
+    body: JSON.stringify({ model }),
+    timeoutMs: 60_000,
+  });
+}
+
 export interface ModelMappingDTO {
   id?: number;
   sourcePattern: string;

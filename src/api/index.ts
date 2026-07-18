@@ -10,6 +10,7 @@ import { filtersRouter } from "./filters";
 import { binApi } from "./bin";
 import { integrationRouter } from "./integration";
 import { oauthRouter } from "./oauth";
+import { modelsRouter } from "./models";
 
 export const apiRouter = new Hono();
 
@@ -24,6 +25,7 @@ apiRouter.route("/filters", filtersRouter);
 apiRouter.route("/bin", binApi);
 apiRouter.route("/integration", integrationRouter);
 apiRouter.route("/oauth", oauthRouter);
+apiRouter.route("/models", modelsRouter);
 
 apiRouter.get("/providers", (c) => {
   return c.json({
