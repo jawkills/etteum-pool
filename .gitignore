@@ -114,3 +114,40 @@ scripts/grok-farm/*.pyc
 # grok farm runtime outputs (keep package clean)
 scripts/grok-farm/results/
 scripts/grok-farm/__pycache__/
+
+
+# ── Root hygiene ─────────────────────────────────────────────
+# Runtime logs / pids (any name)
+.aiproxy.log
+.aiproxy.pid
+.poolprox.log
+.poolprox.pid
+.etteum.log
+.etteum.log.err
+.etteum.pid
+*.pid
+
+# Empty / accidental root DBs (canonical path is data/)
+/etteum-pool.db
+/poolprox.db
+/poolprox3.db
+
+# Local tool dirs
+.omo/
+.zcode/
+.worktrees/
+
+# Root one-off scripts should live under scripts/scratch (ignore if recreated at root)
+/check-*.ts
+/debug-*.ts
+/fix-*.ts
+/reset-*.ts
+/test-*.ts
+/test-*.sh
+/test-*.mjs
+/test-*.js
+
+# Scratch may hold secrets-ish dumps occasionally
+scripts/scratch/**/*.png
+scripts/scratch/**/*.json
+!scripts/scratch/README.md
