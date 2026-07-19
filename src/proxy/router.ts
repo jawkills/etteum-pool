@@ -2,6 +2,7 @@ import type { ChatCompletionRequest, ProviderResult } from "./providers/base";
 import { providers, getAllModels, type ProviderName } from "./providers/registry";
 import { isNonAccountRequestError, isTransientError } from "./errors";
 import { applyPudidilFilters } from "./filters";
+import { applyAccountAttemptResult } from "./account-attempt";
 import { pool } from "./pool";
 import type { Account } from "../db/schema";
 import {
@@ -132,8 +133,7 @@ export async function routeRequest(
     }
   }
 
-  // Try up to 3 accounts before giving up
-  const maxRetries = 3;
+  const maxRetries = Math.max(1, provider.maxAccountRetries ?? 3);
   let lastError = "";
   const attemptedByokAccountIds = new Set<number>();
 
@@ -164,53 +164,29 @@ export async function routeRequest(
 
       const durationMs = Date.now() - startTime;
 
-      if (result.success) {
-        // If provider refreshed tokens internally, persist them to database
-        if (result.tokens) {
-          await pool.updateTokens(account.id, result.tokens);
-        }
-        await pool.markUsed(account.id);
-        return { result, account, provider: providerName, durationMs, compressionStats };
-      }
-
-      pool.trackRequestEnd(account.id);
-      tracked = false;
-
       // Client-side model errors should not poison accounts. A wrong model ID
       // is a bad request, not an account/session failure, so stop retrying and
       // let the API layer return an invalid_model response.
-      if (isNonAccountRequestError(result.error)) {
+      if (!result.success && isNonAccountRequestError(result.error)) {
+        pool.trackRequestEnd(account.id);
+        tracked = false;
         throw new Error(result.error || `Invalid model: ${compressedRequest.model}`);
       }
 
-      // Handle rate limiting (429) — temporary, don't mark exhausted
-      if (result.rateLimited) {
-        lastError = result.error || "Rate limited";
-        continue; // Try next account without poisoning this one
-      }
-
-      // Handle quota exhaustion (402 / 403 without PAYG).
-      //
-      // Trust upstream: if the provider reports quota exhausted, mark it
-      // and move on. For Qoder, the next warmup tick will re-fetch
-      // /activity and /quota/usage and flip the account back to active
-      // automatically if Qoder reports remaining > 0 again. We accept the
-      // occasional false-exhaust (lifted within one warmup cycle) in
-      // exchange for never serving a known-bad account on retry.
-      if (result.quotaExhausted) {
-        await pool.markExhausted(account.id);
-        lastError = result.error || "Quota exhausted";
-        continue; // Try next account
-      }
-
-      // Handle token refresh
+      // Chat-router-only: optional same-account refresh for legacy 401/expired
+      // strings when the provider did not already set deadAccount/rateLimited.
+      // Grok handles refresh inside the provider; this path still serves others.
       if (
-        result.error?.includes("expired") ||
-        result.error?.includes("401")
+        !result.success &&
+        !result.rateLimited &&
+        !result.quotaExhausted &&
+        !result.deadAccount &&
+        (result.error?.includes("expired") || result.error?.includes("401"))
       ) {
+        pool.trackRequestEnd(account.id);
+        tracked = false;
         const refreshResult = await provider.refreshToken(account);
         if (refreshResult.success && refreshResult.tokens) {
-          // Parse tokens string to store as jsonb
           let parsedTokens: unknown;
           try {
             parsedTokens = JSON.parse(refreshResult.tokens);
@@ -218,7 +194,6 @@ export async function routeRequest(
             parsedTokens = refreshResult.tokens;
           }
           await pool.updateTokens(account.id, parsedTokens);
-          // Retry with same account after refresh
           pool.trackRequestStart(account.id);
           tracked = true;
           const retryResult = stream
@@ -226,7 +201,10 @@ export async function routeRequest(
             : await provider.chatCompletion(account, compressedRequest);
 
           if (retryResult.success) {
-            await pool.markUsed(account.id);
+            await applyAccountAttemptResult(account.id, retryResult, {
+              permanentOnGenericFailure: true,
+              isTransientError,
+            });
             return {
               result: retryResult,
               account,
@@ -237,19 +215,42 @@ export async function routeRequest(
           }
           pool.trackRequestEnd(account.id);
           tracked = false;
+          await applyAccountAttemptResult(account.id, retryResult, {
+            permanentOnGenericFailure: true,
+            isTransientError,
+          });
+          lastError = retryResult.error || "Auth failed";
+          continue;
         }
-        await pool.markTransientFailure(account.id, result.error || "Auth failed");
+        await applyAccountAttemptResult(
+          account.id,
+          { success: false, error: result.error || "Auth failed" },
+          { permanentOnGenericFailure: false }
+        );
         lastError = result.error || "Auth failed";
         continue;
       }
 
-      // Generic error - check if transient (network/timeout) or permanent
-      if (isTransientError(result.error || "")) {
-        await pool.markTransientFailure(account.id, result.error || "Transient error");
-      } else {
-        await pool.markError(account.id, result.error || "Unknown error");
+      const disposition = await applyAccountAttemptResult(account.id, result, {
+        permanentOnGenericFailure: true,
+        isTransientError,
+      });
+
+      if (disposition === "success") {
+        return { result, account, provider: providerName, durationMs, compressionStats };
       }
-      lastError = result.error || "Unknown error";
+
+      pool.trackRequestEnd(account.id);
+      tracked = false;
+      lastError =
+        result.error ||
+        (disposition === "rate_limited"
+          ? "Rate limited"
+          : disposition === "exhausted"
+            ? "Quota exhausted"
+            : disposition === "dead"
+              ? "Account dead"
+              : "Unknown error");
     } catch (error) {
       const errMsg =
         error instanceof Error ? error.message : String(error);

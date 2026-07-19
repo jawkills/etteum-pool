@@ -91,10 +91,14 @@ function timeAgo(ts: number) {
   return `${d}h lalu`;
 }
 
+type ImageEngine = "canva" | "grok-cli";
+
 export default function ImageStudio() {
   const [assistModels, setAssistModels] = useState<AssistModelInfo[]>([]);
   const [assistModel, setAssistModel] = useState<string>("auto");
   const [genType, setGenType] = useState<GenType>("image");
+  const [imageEngine, setImageEngine] = useState<ImageEngine>("canva");
+  const [editImageDataUrl, setEditImageDataUrl] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<string>("1:1");
   const [n, setN] = useState<number>(1);
 
@@ -110,6 +114,7 @@ export default function ImageStudio() {
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const editFileRef = useRef<HTMLInputElement>(null);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
@@ -146,6 +151,26 @@ export default function ImageStudio() {
     }
   }
 
+  function onEditFileSelected(file: File | null) {
+    if (!file) {
+      setEditImageDataUrl(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setError("File edit harus berupa gambar");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : null;
+      setEditImageDataUrl(result);
+      setImageEngine("grok-cli");
+      setGenType("image");
+    };
+    reader.onerror = () => setError("Gagal membaca file gambar");
+    reader.readAsDataURL(file);
+  }
+
   async function regenerate(r: GenResult) {
     setGenerating(true);
     setError(null);
@@ -156,6 +181,9 @@ export default function ImageStudio() {
         aspectRatio: r.aspectRatio,
         n: r.n,
         chatId,
+        provider: imageEngine,
+        model: imageEngine === "grok-cli" ? "gcli/grok-image" : undefined,
+        image: editImageDataUrl || undefined,
       });
       const fresh: GenResult = {
         id: res.id ?? Date.now(),
@@ -325,10 +353,23 @@ export default function ImageStudio() {
       setError("Belum ada prompt — chat dulu untuk dapat final prompt, atau ketik manual di kolom input.");
       return;
     }
+    if (imageEngine === "grok-cli" && genType === "video") {
+      setError("Grok CLI hanya support image, bukan video.");
+      return;
+    }
     setGenerating(true);
     setError(null);
     try {
-      const res = await generateImage({ prompt, type: genType, aspectRatio, n, chatId });
+      const res = await generateImage({
+        prompt,
+        type: imageEngine === "grok-cli" ? "image" : genType,
+        aspectRatio,
+        n,
+        chatId,
+        provider: imageEngine,
+        model: imageEngine === "grok-cli" ? "gcli/grok-image" : undefined,
+        image: editImageDataUrl || undefined,
+      });
       const result: GenResult = {
         id: res.id ?? Date.now(),
         prompt: res.prompt,
@@ -379,7 +420,7 @@ export default function ImageStudio() {
               Image Studio
             </h1>
             <p className="text-xs text-[var(--muted-foreground)]">
-              AI prompt assistant untuk Canva Magic Media
+              Prompt assist + generate via Canva atau Grok CLI (free image)
             </p>
           </div>
         </div>
@@ -436,6 +477,38 @@ export default function ImageStudio() {
             <div className="flex items-center rounded border border-[var(--border)] bg-[var(--background)] p-0.5">
               <button
                 type="button"
+                onClick={() => setImageEngine("canva")}
+                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                  imageEngine === "canva"
+                    ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+                title="Canva Magic Media"
+              >
+                Canva
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setImageEngine("grok-cli");
+                  setGenType("image");
+                }}
+                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                  imageEngine === "grok-cli"
+                    ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+                title="Grok CLI free image"
+              >
+                Grok
+              </button>
+            </div>
+
+            <div className="h-5 w-px bg-[var(--border)]" />
+
+            <div className="flex items-center rounded border border-[var(--border)] bg-[var(--background)] p-0.5">
+              <button
+                type="button"
                 onClick={() => setGenType("image")}
                 className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
                   genType === "image"
@@ -448,17 +521,60 @@ export default function ImageStudio() {
               </button>
               <button
                 type="button"
-                onClick={() => setGenType("video")}
+                onClick={() => {
+                  setGenType("video");
+                  setImageEngine("canva");
+                  setEditImageDataUrl(null);
+                }}
                 className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
                   genType === "video"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
-                title="Video"
+                title="Video (Canva only)"
               >
                 <Video className="h-2.5 w-2.5" /> Video
               </button>
             </div>
+
+            {imageEngine === "grok-cli" && (
+              <>
+                <div className="h-5 w-px bg-[var(--border)]" />
+                <input
+                  ref={editFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => onEditFileSelected(e.target.files?.[0] || null)}
+                />
+                <button
+                  type="button"
+                  onClick={() => editFileRef.current?.click()}
+                  className={`flex h-5 items-center gap-1 rounded border px-1.5 text-[10px] transition-colors ${
+                    editImageDataUrl
+                      ? "border-[var(--info)]/40 bg-[var(--info)]/10 text-[var(--info)]"
+                      : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                  }`}
+                  title="Upload source image for Grok edit"
+                >
+                  <Crop className="h-2.5 w-2.5" />
+                  {editImageDataUrl ? "Edit src" : "Edit"}
+                </button>
+                {editImageDataUrl && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditImageDataUrl(null);
+                      if (editFileRef.current) editFileRef.current.value = "";
+                    }}
+                    className="flex h-5 items-center rounded px-1 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--error)]"
+                    title="Clear edit source"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </>
+            )}
 
             <div className="h-5 w-px bg-[var(--border)]" />
 

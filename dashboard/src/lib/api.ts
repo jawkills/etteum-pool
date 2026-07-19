@@ -623,6 +623,10 @@ export async function generateImage(payload: {
   aspectRatio?: string;
   n?: number;
   chatId?: number | null;
+  provider?: "canva" | "grok-cli";
+  model?: string;
+  image?: string;
+  images?: string[];
 }): Promise<{
   id?: number;
   urls: string[];
@@ -631,6 +635,7 @@ export async function generateImage(payload: {
   aspectRatio: string;
   n: number;
   creditsUsed: number;
+  provider?: string;
   createdAt?: string;
   account: { id: number; email: string };
 }> {

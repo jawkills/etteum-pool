@@ -124,12 +124,20 @@ export interface ProviderResult {
   error?: string;
   quotaExhausted?: boolean;
   rateLimited?: boolean; // 429 rate-limit (temporary, don't mark exhausted)
+  /**
+   * Permanent account failure (revoked session, missing credentials, etc.).
+   * Router should markError and try another account — provider-agnostic.
+   */
+  deadAccount?: boolean;
   tokens?: unknown; // New tokens after refresh (if refreshed during request)
 }
 
 export abstract class BaseProvider {
   abstract name: string;
   abstract supportedModels: ModelInfo[];
+
+  /** Account attempts in routeRequest before giving up. Default 3. */
+  maxAccountRetries = 3;
 
   abstract chatCompletion(
     account: Account,

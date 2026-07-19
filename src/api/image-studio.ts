@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { providers, routeRequest } from "../proxy/router";
-import { recordRequest } from "../proxy/index";
+import { recordRequest } from "../proxy/request-log";
 import { prepareLogBody } from "../proxy/logging";
 import { pool } from "../proxy/pool";
 import { db } from "../db/index";
 import { imageStudioChats, imageStudioResults } from "../db/schema";
 import { desc, eq, asc } from "drizzle-orm";
 import type { ChatCompletionRequest } from "../proxy/providers/base";
+import { collectGrokCliImageRefs } from "../proxy/providers/grok-cli-image";
+import { runGrokCliImagePool } from "../proxy/grok-cli-image-pool";
+import { imageFailureStatus } from "../proxy/image-response";
 
 export const imageStudioRouter = new Hono();
 
@@ -187,6 +190,10 @@ imageStudioRouter.post("/generate", async (c) => {
     aspectRatio?: string;
     n?: number;
     chatId?: number | null;
+    provider?: "canva" | "grok-cli";
+    model?: string;
+    image?: unknown;
+    images?: unknown;
   }>();
 
   const prompt = (body.prompt || "").trim();
@@ -195,11 +202,117 @@ imageStudioRouter.post("/generate", async (c) => {
   }
 
   const chatId = typeof body.chatId === "number" && Number.isFinite(body.chatId) ? body.chatId : null;
-
   const type = body.type === "video" ? "video" : "image";
-  const model = type === "video" ? "canva-video" : "canva-image";
+  // Explicit provider only — no substring sniffing of model ids.
+  const engine = body.provider === "grok-cli" ? "grok-cli" : "canva";
+
+  if (type === "video" && engine === "grok-cli") {
+    return c.json({ error: "Grok CLI does not support video generation" }, 400);
+  }
+
   const aspectRatio = VALID_ASPECTS.has(body.aspectRatio || "") ? body.aspectRatio! : "1:1";
   const n = type === "video" ? 1 : Math.min(4, Math.max(1, Number(body.n) || 1));
+
+  // ── Grok CLI free image path (shared pool helper with /v1/images/*) ──
+  if (engine === "grok-cli") {
+    const model = String(body.model || "gcli/grok-image").trim() || "gcli/grok-image";
+    const editImages = collectGrokCliImageRefs(body);
+    const mode = editImages.length > 0 ? "edit" : "generate";
+
+    const { result, accountId, accountEmail, durationMs } = await runGrokCliImagePool({
+      mode,
+      prompt,
+      n,
+      model,
+      images: editImages,
+    });
+
+    if (!result.success || !result.imagesB64?.length) {
+      const errMsg = result.error || "Grok image generation failed";
+      void recordRequest({
+        accountId: accountId ?? null,
+        accountEmail: accountEmail ?? null,
+        provider: "grok-cli",
+        model,
+        promptTokens: result.usage?.prompt_tokens || 0,
+        completionTokens: result.usage?.completion_tokens || 0,
+        totalTokens: result.usage?.total_tokens || 0,
+        creditsUsed: 0,
+        status: "error",
+        durationMs,
+        errorMessage: errMsg,
+        requestBody: prepareLogBody({
+          prompt,
+          n,
+          model,
+          image_count: editImages.length,
+          _poolprox: { source: "image-studio.generate.grok" },
+        }),
+      });
+      return c.json({ error: errMsg }, imageFailureStatus(errMsg));
+    }
+
+    // Free CLI path: PNG-default data URLs; no local pool quota decrement
+    // (aligned with /v1/images/* — see GROK_CLI_IMAGE_DECREMENT_QUOTA).
+    const urls = result.imagesB64.map((b64) => `data:image/png;base64,${b64}`);
+    const creditsUsed = urls.length;
+
+    void recordRequest({
+      accountId: accountId ?? null,
+      accountEmail: accountEmail ?? null,
+      provider: "grok-cli",
+      model,
+      promptTokens: result.usage?.prompt_tokens || 0,
+      completionTokens: result.usage?.completion_tokens || 0,
+      totalTokens: result.usage?.total_tokens || 0,
+      creditsUsed,
+      status: "success",
+      durationMs,
+      requestBody: prepareLogBody({
+        prompt,
+        n,
+        model,
+        image_count: editImages.length,
+        _poolprox: { source: "image-studio.generate.grok" },
+      }),
+      responseBody: prepareLogBody({ image_count: urls.length, usage: result.usage }),
+    });
+
+    let savedResultId: number | undefined;
+    try {
+      const [saved] = await db
+        .insert(imageStudioResults)
+        .values({
+          chatId: chatId ?? null,
+          prompt,
+          type: "image",
+          aspectRatio,
+          n,
+          urls,
+          creditsUsed,
+        })
+        .returning({ id: imageStudioResults.id });
+      savedResultId = saved?.id;
+    } catch (err) {
+      console.error("[image-studio] Failed to persist grok result:", err);
+    }
+
+    return c.json({
+      id: savedResultId,
+      urls,
+      prompt,
+      type: "image",
+      aspectRatio,
+      n,
+      creditsUsed,
+      provider: "grok-cli",
+      createdAt: new Date().toISOString(),
+      account: accountId != null ? { id: accountId, email: accountEmail || "" } : null,
+    });
+  }
+
+  // ── Canva path (default) ──
+  const model = type === "video" ? "canva-video" : "canva-image";
 
   const request = {
     model,
@@ -302,6 +415,7 @@ imageStudioRouter.post("/generate", async (c) => {
       aspectRatio,
       n,
       creditsUsed,
+      provider: "canva",
       createdAt: new Date().toISOString(),
       account: { id: account.id, email: account.email },
     });

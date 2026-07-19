@@ -4,8 +4,14 @@ import {
   grokCliOwnsModel,
   buildGrokCliHeaders,
   classifyGrokCliError,
+  isGrokCliDeadError,
   parseGrokCliModelId,
   resolveGrokCliUpstreamModel,
+  extractGrokCliImageGenerationResults,
+  normalizeGrokCliImageRef,
+  collectGrokCliImageRefs,
+  normalizeGrokCliUsage,
+  stripGrokCliDataUrlPrefix,
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
 } from "./grok-cli";
@@ -133,8 +139,74 @@ describe("classifyGrokCliError", () => {
   });
 });
 
+describe("isGrokCliDeadError", () => {
+  test("matches invalid_grant / revoked / Grok CLI dead prefix", () => {
+    expect(isGrokCliDeadError('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
+    expect(isGrokCliDeadError("Refresh token has been revoked")).toBe(true);
+    expect(isGrokCliDeadError("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isGrokCliDeadError("No access_token for grok-cli account")).toBe(true);
+  });
+  test("does not match generic auth/network", () => {
+    expect(isGrokCliDeadError("Grok CLI auth: unauthorized")).toBe(false);
+    expect(isGrokCliDeadError("timeout")).toBe(false);
+    expect(isGrokCliDeadError(null)).toBe(false);
+  });
+});
+
 describe("constants", () => {
   test("token limit is 2M", () => {
     expect(GROK_CLI_TOKEN_LIMIT).toBe(2_000_000);
+  });
+});
+
+describe("image helpers", () => {
+  test("stripGrokCliDataUrlPrefix removes data URL wrapper", () => {
+    expect(stripGrokCliDataUrlPrefix("data:image/png;base64,abc123")).toBe("abc123");
+    expect(stripGrokCliDataUrlPrefix("abc123")).toBe("abc123");
+  });
+
+  test("normalizeGrokCliImageRef handles bare b64, data URL, https", () => {
+    expect(normalizeGrokCliImageRef("aGVsbG8=")).toBe("data:image/png;base64,aGVsbG8=");
+    expect(normalizeGrokCliImageRef("data:image/jpeg;base64,/9j/xx")).toBe("data:image/jpeg;base64,/9j/xx");
+    expect(normalizeGrokCliImageRef("https://example.com/a.png")).toBe("https://example.com/a.png");
+    expect(normalizeGrokCliImageRef({ b64_json: "zzz" })).toBe("data:image/png;base64,zzz");
+    expect(normalizeGrokCliImageRef(null)).toBe(null);
+  });
+
+  test("collectGrokCliImageRefs gathers image/images and caps", () => {
+    const refs = collectGrokCliImageRefs(
+      {
+        image: "aaa",
+        images: ["bbb", "ccc", "ddd", "eee"],
+      },
+      3
+    );
+    // images array is collected first, then image — cap 3
+    expect(refs).toHaveLength(3);
+  });
+
+  test("extractGrokCliImageGenerationResults reads image_generation_call", () => {
+    const payload = {
+      output: [
+        { type: "reasoning", content: [] },
+        { type: "image_generation_call", result: "data:image/jpeg;base64,/9j/4AAQ" },
+        { type: "image_generation_call", result: { b64_json: "qqq" } },
+      ],
+    };
+    expect(extractGrokCliImageGenerationResults(payload)).toEqual(["/9j/4AAQ", "qqq"]);
+  });
+
+  test("normalizeGrokCliUsage maps input/output aliases", () => {
+    expect(normalizeGrokCliUsage({ input_tokens: 10, output_tokens: 20 })).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 30,
+      input_tokens: 10,
+      output_tokens: 20,
+    });
+  });
+
+  test("owns gcli/grok-image", () => {
+    expect(grokCliOwnsModel("gcli/grok-image")).toBe(true);
   });
 });
