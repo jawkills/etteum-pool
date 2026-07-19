@@ -38,9 +38,9 @@ export async function resolveGrokReauthJobs(opts: {
           .select()
           .from(accounts)
           .where(inArray(accounts.id, opts.ids.map(Number).filter(Number.isFinite)))
-      : await db.select().from(accounts).where(eq(accounts.provider, "grok-cli"));
+      : await db.select().from(accounts).where(eq(accounts.provider, "grok"));
 
-  rows = rows.filter((r) => r.provider === "grok-cli");
+  rows = rows.filter((r) => r.provider === "grok");
 
   if (opts.onlyDead !== false && !(opts.ids && opts.ids.length > 0)) {
     rows = rows.filter(

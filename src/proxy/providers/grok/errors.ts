@@ -219,7 +219,7 @@ export function formatGrokAuthFailure(error?: string | null): {
     return { error: raw, deadAccount: true, permanent: false, kind };
   }
   return {
-    error: raw.startsWith("Grok CLI auth:") ? raw : `Grok CLI auth: ${raw}`,
+    error: raw.startsWith("Grok auth:") ? raw : `Grok auth: ${raw}`,
     deadAccount: false,
     permanent: false,
     kind,

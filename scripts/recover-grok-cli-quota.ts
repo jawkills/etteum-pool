@@ -16,7 +16,7 @@ import { db } from "../src/db/index.ts";
 import { accounts } from "../src/db/schema.ts";
 import { eq, and } from "drizzle-orm";
 import {
-  grokCliProvider,
+  grokProvider,
   resolveGrokCliUpstreamModel,
 } from "../src/proxy/providers/grok-cli";
 
@@ -36,7 +36,7 @@ if (PROBE_MODEL !== "grok-4.5") {
 const rows = await db
   .select()
   .from(accounts)
-  .where(and(eq(accounts.provider, "grok-cli"), eq(accounts.status, "exhausted")))
+  .where(and(eq(accounts.provider, "grok"), eq(accounts.status, "exhausted")))
   .limit(limit || 100_000);
 
 console.log(
@@ -54,7 +54,7 @@ async function worker(queue: typeof rows): Promise<void> {
     const account = queue.shift();
     if (!account) return;
     try {
-      const quota = await grokCliProvider.fetchQuota(account);
+      const quota = await grokProvider.fetchQuota(account);
       const q = quota.quota;
       const exhausted =
         quota.exhausted === true ||

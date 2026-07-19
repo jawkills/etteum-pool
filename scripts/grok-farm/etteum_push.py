@@ -113,14 +113,14 @@ def push_accounts_to_etteum(
     timeout: float = 60.0,
     retries: int = 3,
 ) -> dict[str, Any]:
-    """POST /api/accounts/grok-cli/import. Returns parsed JSON or raises."""
+    """POST /api/accounts/grok/import. Returns parsed JSON or raises."""
     if not items:
         return {"imported": 0, "failed": 0, "results": []}
     base = (base_url or _env("ETTEUM_URL", "http://127.0.0.1:1930")).rstrip("/")
     key = api_key or _env("ETTEUM_API_KEY") or _env("API_KEY")
     if not key:
         raise RuntimeError("ETTEUM_API_KEY not set")
-    url = f"{base}/api/accounts/grok-cli/import"
+    url = f"{base}/api/accounts/grok/import"
     body = json.dumps(build_import_payload(items)).encode("utf-8")
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):

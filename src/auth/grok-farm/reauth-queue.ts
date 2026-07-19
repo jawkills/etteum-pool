@@ -1,5 +1,5 @@
 /**
- * Grok CLI reauth job — login existing email+password via http_farm --reauth-file.
+ * Grok reauth job — login existing email+password via http_farm --reauth-file.
  * Lifecycle shared with farm via grok-farm-process (no clone of spawn/stop/line buffer).
  */
 
@@ -107,7 +107,7 @@ class GrokReauthQueue {
           error:
             skipped.length > 0
               ? `No reauthable accounts (${skipped.length} skipped: missing password)`
-              : "No grok-cli accounts eligible for reauth",
+              : "No Grok accounts eligible for reauth",
         };
       }
 
@@ -173,7 +173,7 @@ class GrokReauthQueue {
             if (this.status.success > 0) {
               broadcast({
                 type: "accounts_updated",
-                data: { count: this.status.success, provider: "grok-cli", reason: "reauth" },
+                data: { count: this.status.success, provider: "grok", reason: "reauth" },
               });
             }
           } else {

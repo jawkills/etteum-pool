@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { prepareLogBody } from "./logging";
 import { recordRequest } from "./request-log";
-import { collectGrokCliImageRefs } from "./providers/grok-cli-image";
-import { runGrokCliImagePool } from "./grok-cli-image-pool";
+import { collectGrokCliImageRefs } from "./providers/grok/image";
+import { runGrokCliImagePool } from "./grok-image-pool";
 import { imageFailureStatus, openAIImagesResponse } from "./image-response";
 
 export const imagesRouter = new Hono();
@@ -62,7 +62,7 @@ async function handleImages(
   // Generations with image payload is treated as edit (documented OpenAI-compat convenience).
   const mode = images.length > 0 ? "edit" : "generate";
   const n = Math.min(4, Math.max(1, Number(body.n) || 1));
-  const model = String(body.model || "gcli/grok-image").trim() || "gcli/grok-image";
+  const model = String(body.model || "grok-image").trim() || "grok-image";
 
   const { result, accountId, accountEmail, durationMs } = await runGrokCliImagePool({
     mode,
@@ -75,7 +75,7 @@ async function handleImages(
   void recordRequest({
     accountId: accountId ?? null,
     accountEmail: accountEmail ?? null,
-    provider: "grok-cli",
+    provider: "grok",
     model,
     promptTokens: result.usage?.prompt_tokens || 0,
     completionTokens: result.usage?.completion_tokens || 0,
@@ -120,7 +120,7 @@ async function handleImages(
 
 /**
  * POST /v1/images/generations — OpenAI-compatible image generation.
- * Free Grok CLI path uses Responses + image_generation tool (not api.x.ai).
+ * Free Grok path uses Responses + image_generation tool (not api.x.ai).
  * If body includes image/images, routes to edit behavior.
  */
 imagesRouter.post("/v1/images/generations", (c) =>
@@ -128,7 +128,7 @@ imagesRouter.post("/v1/images/generations", (c) =>
 );
 
 /**
- * POST /v1/images/edits — OpenAI-compatible image edit via Grok CLI free path.
+ * POST /v1/images/edits — OpenAI-compatible image edit via Grok free path.
  */
 imagesRouter.post("/v1/images/edits", (c) =>
   handleImages(c, { requireImages: true, source: "v1.images.edits" })

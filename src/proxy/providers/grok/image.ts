@@ -1,5 +1,5 @@
 /**
- * Pure helpers for Grok CLI free image generate/edit
+ * Pure helpers for Grok free image generate/edit
  * (Responses API + image_generation tool — not paid api.x.ai).
  */
 

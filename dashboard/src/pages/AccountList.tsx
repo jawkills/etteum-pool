@@ -21,7 +21,7 @@ import {
   warmupAllAccounts,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "grok-cli";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "grok";
 type Status = "active" | "exhausted" | "error" | "pending" | "disabled";
 
 interface CodexQuotaWindow {
@@ -108,7 +108,7 @@ const statusVariants: Record<string, "success" | "warning" | "error" | "secondar
 function labelProvider(provider: string) {
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
-  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "grok") return "Grok";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -508,8 +508,8 @@ export default function AccountList() {
           <Button variant="outline" size="sm" onClick={handleWarmupAll}>
             <RefreshCw className="w-4 h-4 mr-2" /> Warmup All
           </Button>
-          {/* grok-cli has no browser login queue — use Accounts Refresh tok / Reauth instead */}
-          {provider !== "grok-cli" && (
+          {/* grok has no browser login queue — use Accounts Refresh tok / Reauth instead */}
+          {provider !== "grok" && (
             <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
               <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
             </Button>
@@ -667,8 +667,8 @@ export default function AccountList() {
                         <Button variant="ghost" size="icon" onClick={() => handleWarmup(account.id)} title="WarmUp">
                           <RefreshCw className="w-4 h-4 text-[var(--warning)]" />
                         </Button>
-                        {/* grok-cli has no auto-login bot path — Refresh tok / Reauth live on Accounts */}
-                        {account.provider !== "grok-cli" && (
+                        {/* grok has no auto-login bot path — Refresh tok / Reauth live on Accounts */}
+                        {account.provider !== "grok" && (
                           <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
                             <RotateCcw className="w-4 h-4" />
                           </Button>

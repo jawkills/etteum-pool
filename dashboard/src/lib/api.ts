@@ -472,7 +472,7 @@ export async function importAccounts(text: string, providers: string[], options?
 }
 
 export async function importGrokCliAccounts(payload: { accounts?: any[]; text?: string }) {
-  return fetchApi(`/api/accounts/grok-cli/import`, {
+  return fetchApi(`/api/accounts/grok/import`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -494,18 +494,18 @@ export type GrokFarmStatus = {
 };
 
 export async function fetchGrokFarmStatus() {
-  return fetchApi(`/api/accounts/grok-cli/farm`);
+  return fetchApi(`/api/accounts/grok/farm`);
 }
 
 export async function startGrokFarm(payload: { count: number; concurrent?: number }) {
-  return fetchApi(`/api/accounts/grok-cli/farm`, {
+  return fetchApi(`/api/accounts/grok/farm`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export async function stopGrokFarm() {
-  return fetchApi(`/api/accounts/grok-cli/farm/stop`, {
+  return fetchApi(`/api/accounts/grok/farm/stop`, {
     method: "POST",
     body: JSON.stringify({}),
   });
@@ -527,7 +527,7 @@ export type GrokReauthStatus = {
 };
 
 export async function fetchGrokReauthStatus() {
-  return fetchApi<GrokReauthStatus>(`/api/accounts/grok-cli/reauth`);
+  return fetchApi<GrokReauthStatus>(`/api/accounts/grok/reauth`);
 }
 
 export async function startGrokReauth(payload: {
@@ -536,7 +536,7 @@ export async function startGrokReauth(payload: {
   concurrent?: number;
 }) {
   return fetchApi<{ ok: boolean; target: number; skipped: number }>(
-    `/api/accounts/grok-cli/reauth`,
+    `/api/accounts/grok/reauth`,
     {
       method: "POST",
       body: JSON.stringify(payload),
@@ -545,7 +545,7 @@ export async function startGrokReauth(payload: {
 }
 
 export async function stopGrokReauth() {
-  return fetchApi(`/api/accounts/grok-cli/reauth/stop`, {
+  return fetchApi(`/api/accounts/grok/reauth/stop`, {
     method: "POST",
     body: JSON.stringify({}),
   });
@@ -683,7 +683,7 @@ export async function generateImage(payload: {
   aspectRatio?: string;
   n?: number;
   chatId?: number | null;
-  provider?: "canva" | "grok-cli";
+  provider?: "canva" | "grok";
   model?: string;
   image?: string;
   images?: string[];

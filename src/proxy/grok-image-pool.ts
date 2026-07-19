@@ -1,8 +1,8 @@
 import { applyAccountAttemptResult } from "./account-attempt";
 import { pool } from "./pool";
 import { providers } from "./providers/registry";
-import type { GrokCliProvider } from "./providers/grok-cli";
-import type { GrokCliImageResult } from "./providers/grok-cli-image";
+import type { GrokProvider } from "./providers/grok";
+import type { GrokCliImageResult } from "./providers/grok/image";
 
 export type GrokCliImagePoolOpts = {
   mode: "generate" | "edit";
@@ -21,23 +21,23 @@ export type GrokCliImagePoolOutcome = {
 };
 
 /**
- * Shared pool loop for Grok CLI free image generate/edit.
+ * Shared pool loop for Grok free image generate/edit.
  * Used by /v1/images/* and Image Studio so retry/quota policy stays one place.
  * Account mark* side-effects go through applyAccountAttemptResult (same as chat router).
  */
 export async function runGrokCliImagePool(
   opts: GrokCliImagePoolOpts
 ): Promise<GrokCliImagePoolOutcome> {
-  const provider = providers["grok-cli"] as GrokCliProvider;
+  const provider = providers["grok"] as GrokProvider;
   if (!provider?.imageRequest) {
     return {
-      result: { success: false, error: "Grok CLI image provider unavailable" },
+      result: { success: false, error: "Grok image provider unavailable" },
       durationMs: 0,
     };
   }
 
   const maxAttempts = opts.maxAttempts ?? Math.max(1, provider.maxAccountRetries ?? 3);
-  let lastError = "No active grok-cli accounts";
+  let lastError = "No active grok accounts";
   const started = Date.now();
   const images = (opts.images || []).filter(Boolean);
 
@@ -49,7 +49,7 @@ export async function runGrokCliImagePool(
   }
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const account = await pool.getNextAccount("grok-cli");
+    const account = await pool.getNextAccount("grok");
     if (!account) break;
 
     pool.trackRequestStart(account.id);

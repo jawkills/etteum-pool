@@ -1,5 +1,5 @@
 /**
- * Grok CLI provider — session policy + catalog + public barrel.
+ * Grok provider — session policy + catalog + public barrel.
  * Wire HTTP lives in grok-cli-wire.ts; pure helpers in sibling modules.
  */
 
@@ -27,17 +27,19 @@ export {
   GROK_CLI_CLIENT_ID,
   GROK_CLI_CLIENT_VERSION,
   GROK_CLI_CLIENT_IDENTIFIER,
+  GROK_CLI_TOKEN_AUTH_VALUE,
   GROK_CLI_REFRESH_LEAD_SEC,
   GROK_CLI_IMAGE_TIMEOUT_MS,
   GROK_CLI_CREDIT_SOFT_ERROR,
 } from "./constants";
+export { type GrokCliTokens, type GrokCliNormalized, normalizeGrokCliCpa } from "./cpa";
 export {
-  type GrokCliTokens,
-  type GrokCliNormalized,
-  normalizeGrokCliCpa,
-} from "./cpa";
-export {
-  type GrokCliEffort,
+  type GrokEffort,
+  GROK_CATALOG_IDS,
+  GROK_UPSTREAM_MODEL,
+  parseGrokModelId,
+  resolveGrokUpstreamModel,
+  grokOwnsModel,
   GROK_CLI_CATALOG_IDS,
   parseGrokCliModelId,
   resolveGrokCliUpstreamModel,
@@ -75,7 +77,7 @@ export {
   emptyGrokCliUsage,
   addGrokCliUsage,
 } from "./image";
-export { buildGrokCliHeaders } from "./headers";
+export { buildGrokHeaders, buildGrokCliHeaders } from "./headers";
 
 import {
   GROK_CLI_TOKEN_LIMIT,
@@ -83,8 +85,8 @@ import {
 } from "./constants";
 import { type GrokCliTokens } from "./cpa";
 import {
-  GROK_CLI_CATALOG_IDS,
-  grokCliOwnsModel,
+  GROK_CATALOG_IDS,
+  grokOwnsModel,
 } from "./models";
 import {
   classifyGrokCliError,
@@ -123,8 +125,8 @@ export function grokCliNeedsProactiveRefresh(
 
 type RefreshResult = { success: boolean; tokens?: string; error?: string };
 
-export class GrokCliProvider extends BaseProvider {
-  name = "grok-cli";
+export class GrokProvider extends BaseProvider {
+  name = "grok";
   override nativeFormat: "openai" | "anthropic" = "openai";
   override isFallback = false;
 
@@ -135,30 +137,27 @@ export class GrokCliProvider extends BaseProvider {
   private refreshLocks = new Map<number, Promise<RefreshResult>>();
 
   supportedModels: ModelInfo[] = [
-    ...GROK_CLI_CATALOG_IDS.map((id) => ({
+    ...GROK_CATALOG_IDS.map((id) => ({
       id,
       object: "model" as const,
       created: Date.now(),
-      owned_by: "grok-cli",
-      // Official default TUI model is grok-build; 4.5 effort aliases still listed.
-      context_window: id === "gcli/grok-build" ? 500_000 : 256_000,
-      max_output: id === "gcli/grok-build" ? 64_000 : 16_000,
-      // Effort aliases imply thinking; plain 4.5 / build leave thinking optional.
-      thinking: id.includes("-high") || id.includes("-medium") || id.includes("-low"),
+      owned_by: "grok",
+      context_window: 500_000,
+      thinking: true,
       vision: true,
       creditUnit: "token" as const,
       creditRate: 1,
       creditSource: "estimated" as const,
     })),
     {
-      id: "gcli/grok-image",
+      id: "grok-image",
       object: "model" as const,
       created: Date.now(),
-      owned_by: "grok-cli",
-      context_window: 256000,
+      owned_by: "grok",
+      context_window: 500_000,
       max_output: 4096,
       thinking: false,
-      vision: false,
+      vision: true,
       creditUnit: "image" as const,
       creditRate: 1,
       creditSource: "estimated" as const,
@@ -166,22 +165,16 @@ export class GrokCliProvider extends BaseProvider {
   ];
 
   override ownsModel(model: string): boolean {
-    return grokCliOwnsModel(model);
+    return grokOwnsModel(model);
   }
 
   override getModelInfo(model: string): ModelInfo | undefined {
     const m = model.trim().toLowerCase();
     const exact = this.supportedModels.find((item) => item.id.toLowerCase() === m);
     if (exact) return exact;
-    if (m === "grok-build" || m === "gcli/grok-build" || m === "gb") {
-      return this.supportedModels.find((item) => item.id === "gcli/grok-build");
+    if (m === "grok-4.5-max") {
+      return this.supportedModels.find((item) => item.id === "grok-4.5-xhigh");
     }
-    if (m === "grok-4.5" || m === "gcli/grok-4.5") {
-      return this.supportedModels.find((item) => item.id === "gcli/grok-4.5");
-    }
-    if (m.endsWith("-high")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-high");
-    if (m.endsWith("-medium")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-medium");
-    if (m.endsWith("-low")) return this.supportedModels.find((item) => item.id === "gcli/grok-4.5-low");
     return super.getModelInfo(model);
   }
 
@@ -221,7 +214,7 @@ export class GrokCliProvider extends BaseProvider {
 
     const tokens = this.getTokens(account);
     if (!tokens?.access_token) {
-      const formatted = formatGrokAuthFailure("No access_token for grok-cli account");
+      const formatted = formatGrokAuthFailure("No access_token for grok account");
       return {
         ok: false,
         error: formatted.error,
@@ -246,7 +239,7 @@ export class GrokCliProvider extends BaseProvider {
         error:
           mode === "hot"
             ? "No refresh_token"
-            : "No access_token/refresh_token for grok-cli account",
+            : "No access_token/refresh_token for grok account",
         deadAccount: false,
         kind: "missing_tokens",
       };
@@ -486,7 +479,7 @@ export class GrokCliProvider extends BaseProvider {
               remaining: 0,
               used: q.used ?? Math.max(0, q.limit),
               resetAt: q.resetAt ?? null,
-              source: q.source || "grok-cli.fetchQuota",
+              source: q.source || "grok.fetchQuota",
             }
           : {
               limit: GROK_CLI_TOKEN_LIMIT,
@@ -509,7 +502,7 @@ export class GrokCliProvider extends BaseProvider {
             remaining: q.remaining,
             used: q.used,
             resetAt: q.resetAt ?? null,
-            source: q.source || "grok-cli.fetchQuota",
+            source: q.source || "grok.fetchQuota",
           }
         : undefined,
     };
@@ -520,4 +513,8 @@ export class GrokCliProvider extends BaseProvider {
   }
 }
 
-export const grokCliProvider = new GrokCliProvider();
+export const grokProvider = new GrokProvider();
+
+/** @deprecated use grokProvider */
+export const grokCliProvider = grokProvider;
+export { GrokProvider as GrokCliProvider };

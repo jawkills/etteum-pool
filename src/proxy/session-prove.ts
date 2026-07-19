@@ -73,7 +73,7 @@ export async function proveAccountSession(
     };
   }
 
-  // Prefer provider-specific prove (Grok CLI OAuth semantics).
+  // Prefer provider-specific prove (Grok OAuth semantics).
   if (typeof provider.proveSession === "function") {
     return provider.proveSession(account, mode);
   }

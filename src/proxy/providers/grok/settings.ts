@@ -1,8 +1,8 @@
 /**
- * Grok CLI runtime settings — settings table with short TTL cache.
+ * Grok runtime settings — settings table with short TTL cache.
  * Keys (optional; defaults match previous hardcodes):
- *   grok_cli_refresh_lead_sec   int seconds (default 2700 = 45m)
- *   grok_cli_max_account_retries int attempts per request (default 8)
+ *   grok_refresh_lead_sec   int seconds (default 2700 = 45m)
+ *   grok_max_account_retries int attempts per request (default 8)
  *
  * Hot path reads cache sync. First miss kicks a background DB load so
  * operator knobs survive process restart without waiting for Settings PUT.
@@ -45,19 +45,19 @@ function parseInt10(
 }
 
 async function loadFromDb(): Promise<GrokCliRuntimeSettings> {
-  const rows = await db.select().from(settings).where(like(settings.key, "grok_cli_%"));
+  const rows = await db.select().from(settings).where(like(settings.key, "grok_%"));
   const map = new Map<string, string | null>();
   for (const r of rows) map.set(r.key, r.value);
 
   return {
     refreshLeadSec: parseInt10(
-      map.get("grok_cli_refresh_lead_sec"),
+      map.get("grok_refresh_lead_sec") ?? map.get("grok_cli_refresh_lead_sec"),
       DEFAULT_GROK_CLI_RUNTIME.refreshLeadSec,
       60,
       24 * 60 * 60,
     ),
     maxAccountRetries: parseInt10(
-      map.get("grok_cli_max_account_retries"),
+      map.get("grok_max_account_retries") ?? map.get("grok_cli_max_account_retries"),
       DEFAULT_GROK_CLI_RUNTIME.maxAccountRetries,
       1,
       50,
@@ -112,5 +112,5 @@ export function invalidateGrokCliSettingsCache(): void {
 }
 
 export function isGrokCliSettingKey(key: string): boolean {
-  return key.startsWith("grok_cli_");
+  return key.startsWith("grok_") || key.startsWith("grok_cli_");
 }

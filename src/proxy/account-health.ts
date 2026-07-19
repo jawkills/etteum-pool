@@ -88,6 +88,7 @@ export function isMissingCredentialMessage(error?: string | null): boolean {
   // Avoid double-counting permanent death strings that mention tokens.
   if (isPermanentRevocation(error)) return false;
   return (
+    low.includes("no access_token for grok") ||
     low.includes("no access_token for grok-cli") ||
     low.includes("no access_token") ||
     low.includes("no refresh_token") ||
@@ -112,6 +113,7 @@ export function isDeadErrorMessage(error?: string | null): boolean {
  */
 export const PLACEHOLDER_PASSWORDS: ReadonlySet<string> = new Set([
   "grok-cli-token-auth",
+  "grok-token-auth",
   "instant-login",
   "pat-login",
   "",

@@ -7,8 +7,8 @@ import { db } from "../db/index";
 import { imageStudioChats, imageStudioResults } from "../db/schema";
 import { desc, eq, asc } from "drizzle-orm";
 import type { ChatCompletionRequest } from "../proxy/providers/base";
-import { collectGrokCliImageRefs } from "../proxy/providers/grok-cli-image";
-import { runGrokCliImagePool } from "../proxy/grok-cli-image-pool";
+import { collectGrokCliImageRefs } from "../proxy/providers/grok/image";
+import { runGrokCliImagePool } from "../proxy/grok-image-pool";
 import { imageFailureStatus } from "../proxy/image-response";
 
 export const imageStudioRouter = new Hono();
@@ -190,7 +190,7 @@ imageStudioRouter.post("/generate", async (c) => {
     aspectRatio?: string;
     n?: number;
     chatId?: number | null;
-    provider?: "canva" | "grok-cli";
+    provider?: "canva" | "grok";
     model?: string;
     image?: unknown;
     images?: unknown;
@@ -204,18 +204,18 @@ imageStudioRouter.post("/generate", async (c) => {
   const chatId = typeof body.chatId === "number" && Number.isFinite(body.chatId) ? body.chatId : null;
   const type = body.type === "video" ? "video" : "image";
   // Explicit provider only — no substring sniffing of model ids.
-  const engine = body.provider === "grok-cli" ? "grok-cli" : "canva";
+  const engine = body.provider === "grok" ? "grok" : "canva";
 
-  if (type === "video" && engine === "grok-cli") {
-    return c.json({ error: "Grok CLI does not support video generation" }, 400);
+  if (type === "video" && engine === "grok") {
+    return c.json({ error: "Grok does not support video generation" }, 400);
   }
 
   const aspectRatio = VALID_ASPECTS.has(body.aspectRatio || "") ? body.aspectRatio! : "1:1";
   const n = type === "video" ? 1 : Math.min(4, Math.max(1, Number(body.n) || 1));
 
-  // ── Grok CLI free image path (shared pool helper with /v1/images/*) ──
-  if (engine === "grok-cli") {
-    const model = String(body.model || "gcli/grok-image").trim() || "gcli/grok-image";
+  // ── Grok free image path (shared pool helper with /v1/images/*) ──
+  if (engine === "grok") {
+    const model = String(body.model || "grok-image").trim() || "grok-image";
     const editImages = collectGrokCliImageRefs(body);
     const mode = editImages.length > 0 ? "edit" : "generate";
 
@@ -232,7 +232,7 @@ imageStudioRouter.post("/generate", async (c) => {
       void recordRequest({
         accountId: accountId ?? null,
         accountEmail: accountEmail ?? null,
-        provider: "grok-cli",
+        provider: "grok",
         model,
         promptTokens: result.usage?.prompt_tokens || 0,
         completionTokens: result.usage?.completion_tokens || 0,
@@ -260,7 +260,7 @@ imageStudioRouter.post("/generate", async (c) => {
     void recordRequest({
       accountId: accountId ?? null,
       accountEmail: accountEmail ?? null,
-      provider: "grok-cli",
+      provider: "grok",
       model,
       promptTokens: result.usage?.prompt_tokens || 0,
       completionTokens: result.usage?.completion_tokens || 0,
@@ -305,7 +305,7 @@ imageStudioRouter.post("/generate", async (c) => {
       aspectRatio,
       n,
       creditsUsed,
-      provider: "grok-cli",
+      provider: "grok",
       createdAt: new Date().toISOString(),
       account: accountId != null ? { id: accountId, email: accountEmail || "" } : null,
     });

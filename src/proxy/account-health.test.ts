@@ -33,17 +33,17 @@ describe("isPermanentRevocation / isDeadErrorMessage", () => {
     const { isPermanentRevocation, isMissingCredentialMessage } = await import("./account-health");
     expect(isPermanentRevocation('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
     expect(isPermanentRevocation("Refresh token has been revoked")).toBe(true);
-    expect(isPermanentRevocation("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isPermanentRevocation("Grok dead: invalid_grant")).toBe(true);
     expect(isPermanentRevocation("Account dead")).toBe(true);
     expect(isPermanentRevocation("no access_token")).toBe(false);
     expect(isMissingCredentialMessage("no access_token")).toBe(true);
-    expect(isMissingCredentialMessage("No access_token for grok-cli account")).toBe(true);
+    expect(isMissingCredentialMessage("No access_token for grok account")).toBe(true);
     expect(isMissingCredentialMessage("invalid_grant")).toBe(false);
   });
   test("isDeadErrorMessage unions permanent + missing", () => {
     expect(isDeadErrorMessage('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
     expect(isDeadErrorMessage("no access_token")).toBe(true);
-    expect(isDeadErrorMessage("Grok CLI auth: unauthorized")).toBe(false);
+    expect(isDeadErrorMessage("Grok auth: unauthorized")).toBe(false);
     expect(isDeadErrorMessage("timeout")).toBe(false);
     expect(isDeadErrorMessage("session_expired")).toBe(false);
     expect(isDeadErrorMessage(null)).toBe(false);
@@ -53,6 +53,7 @@ describe("isPermanentRevocation / isDeadErrorMessage", () => {
 describe("isPlaceholderPassword", () => {
   test("synthetic signup markers are placeholders", () => {
     expect(isPlaceholderPassword("grok-cli-token-auth")).toBe(true);
+    expect(isPlaceholderPassword("grok-token-auth")).toBe(true);
     expect(isPlaceholderPassword("instant-login")).toBe(true);
     expect(isPlaceholderPassword("pat-login")).toBe(true);
   });

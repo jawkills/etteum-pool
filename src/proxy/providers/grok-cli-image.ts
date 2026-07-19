@@ -1,2 +1,2 @@
-/** Compatibility re-export — image helpers live in providers/grok-cli/image. */
-export * from "./grok-cli/image";
+/** @deprecated Use `./grok/image`. */
+export * from "./grok/image";

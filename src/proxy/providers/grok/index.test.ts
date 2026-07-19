@@ -103,48 +103,46 @@ describe("normalizeGrokCliCpa", () => {
   });
 });
 
-describe("grokCliOwnsModel", () => {
-  test("owns gcli catalog ids", () => {
-    expect(grokCliOwnsModel("gcli/grok-build")).toBe(true);
-    expect(grokCliOwnsModel("gcli/grok-4.5")).toBe(true);
-    expect(grokCliOwnsModel("gcli/grok-4.5-high")).toBe(true);
-    expect(grokCliOwnsModel("gcli/grok-4.5-medium")).toBe(true);
-    expect(grokCliOwnsModel("gcli/grok-4.5-low")).toBe(true);
-  });
-  test("owns bare grok-build and grok-4.5 compat", () => {
-    expect(grokCliOwnsModel("grok-build")).toBe(true);
+
+describe("grokOwnsModel / catalog", () => {
+  test("owns grok-4.5 and effort model ids only", () => {
     expect(grokCliOwnsModel("grok-4.5")).toBe(true);
+    expect(grokCliOwnsModel("grok-4.5-low")).toBe(true);
+    expect(grokCliOwnsModel("grok-4.5-medium")).toBe(true);
+    expect(grokCliOwnsModel("grok-4.5-high")).toBe(true);
+    expect(grokCliOwnsModel("grok-4.5-xhigh")).toBe(true);
+    expect(grokCliOwnsModel("grok-image")).toBe(true);
   });
-  test("owns prefixed grok-cli-grok-4.5", () => {
-    expect(grokCliOwnsModel("grok-cli-grok-4.5")).toBe(true);
+  test("hard cut: no gcli/ prefix ownership", () => {
+    expect(grokCliOwnsModel("gcli/grok-4.5")).toBe(false);
+    expect(grokCliOwnsModel("gcli/grok-4.5-high")).toBe(false);
   });
-  test("does not own claude/gpt ids", () => {
+  test("does not own claude/gpt/grok-build", () => {
     expect(grokCliOwnsModel("claude-sonnet-4.6")).toBe(false);
     expect(grokCliOwnsModel("gpt-4o")).toBe(false);
+    expect(grokCliOwnsModel("grok-build")).toBe(false);
   });
 });
 
-describe("parseGrokCliModelId", () => {
-  test("maps gcli effort aliases to grok-4.5 + effort", () => {
-    const base = parseGrokCliModelId("gcli/grok-4.5");
+describe("parseGrokModelId", () => {
+  test("maps effort model ids to upstream grok-4.5 + effort", () => {
+    const base = parseGrokCliModelId("grok-4.5");
     expect(base.upstream).toBe("grok-4.5");
     expect(base.effort).toBeNull();
-    expect(base.allowReasoningEffort).toBe(true);
-    expect(parseGrokCliModelId("gcli/grok-4.5-high").effort).toBe("high");
-    expect(parseGrokCliModelId("gcli/grok-4.5-medium").effort).toBe("medium");
-    expect(parseGrokCliModelId("gcli/grok-4.5-low").effort).toBe("low");
-    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-high")).toBe("grok-4.5");
+    expect(parseGrokCliModelId("grok-4.5-high").effort).toBe("high");
+    expect(parseGrokCliModelId("grok-4.5-medium").effort).toBe("medium");
+    expect(parseGrokCliModelId("grok-4.5-low").effort).toBe("low");
+    expect(parseGrokCliModelId("grok-4.5-xhigh").effort).toBe("xhigh");
+    expect(resolveGrokCliUpstreamModel("grok-4.5-high")).toBe("grok-4.5");
   });
-  test("maps grok-build without reasoning effort", () => {
-    const p = parseGrokCliModelId("gcli/grok-build");
-    expect(p.upstream).toBe("grok-build");
-    expect(p.effort).toBeNull();
-    expect(p.allowReasoningEffort).toBe(false);
-    expect(resolveGrokCliUpstreamModel("grok-build")).toBe("grok-build");
-  });
-  test("catalog includes grok-build + 4.5 effort aliases", () => {
-    expect(GROK_CLI_CATALOG_IDS).toContain("gcli/grok-build");
-    expect(GROK_CLI_CATALOG_IDS).toHaveLength(5);
+  test("catalog is bare + four effort ids", () => {
+    expect(GROK_CLI_CATALOG_IDS).toEqual([
+      "grok-4.5",
+      "grok-4.5-low",
+      "grok-4.5-medium",
+      "grok-4.5-high",
+      "grok-4.5-xhigh",
+    ]);
   });
 });
 
@@ -175,9 +173,9 @@ describe("buildGrokCliHeaders", () => {
     expect(h["x-userid"]).toBe("u1");
     expect(h["x-grok-user-id"]).toBe("u1");
   });
-  test("model override for grok-build", () => {
-    const h = buildGrokCliHeaders({ access_token: "tok" }, "gcli/grok-build");
-    expect(h["x-grok-model-override"]).toBe("grok-build");
+  test("model override for grok-4.5", () => {
+    const h = buildGrokCliHeaders({ access_token: "tok" }, "grok-4.5");
+    expect(h["x-grok-model-override"]).toBe("grok-4.5");
   });
 });
 
@@ -262,15 +260,15 @@ describe("GROK_CLI_CREDIT_SOFT_ERROR", () => {
 });
 
 describe("isGrokCliDeadError", () => {
-  test("matches invalid_grant / revoked / Grok CLI dead prefix", () => {
+  test("matches invalid_grant / revoked / Grok dead prefix", () => {
     expect(isGrokCliDeadError('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
     expect(isGrokCliDeadError("Refresh token has been revoked")).toBe(true);
-    expect(isGrokCliDeadError("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isGrokCliDeadError("Grok dead: invalid_grant")).toBe(true);
     // Missing credentials are unusable for traffic (dead) but not permanent IdP death.
     expect(isGrokCliDeadError("No access_token for grok-cli account")).toBe(true);
   });
   test("does not match generic auth/network", () => {
-    expect(isGrokCliDeadError("Grok CLI auth: unauthorized")).toBe(false);
+    expect(isGrokCliDeadError("Grok auth: unauthorized")).toBe(false);
     expect(isGrokCliDeadError("timeout")).toBe(false);
     expect(isGrokCliDeadError(null)).toBe(false);
   });
@@ -283,7 +281,7 @@ describe("isGrokCliDeadError", () => {
     expect(isMissingCredentialMessage(msg)).toBe(true);
     expect(isPermanentRevocation(msg)).toBe(false);
     // The permanent latch string itself must only match real IdP death.
-    expect(isPermanentRevocation("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isPermanentRevocation("Grok dead: invalid_grant")).toBe(true);
     expect(isPermanentRevocation(msg)).toBe(false);
   });
 });
@@ -311,7 +309,7 @@ describe("formatGrokAuthFailure", () => {
     const out = formatGrokAuthFailure("unauthorized");
     expect(out.kind).toBe("auth");
     expect(out.deadAccount).toBe(false);
-    expect(out.error).toBe("Grok CLI auth: unauthorized");
+    expect(out.error).toBe("Grok auth: unauthorized");
   });
 });
 
@@ -327,9 +325,9 @@ describe("quota probe model (regression)", () => {
   // every free/personal team. Catalog upstream is "grok-4.5" only.
   test("catalog upstream model is grok-4.5", () => {
     expect(resolveGrokCliUpstreamModel("grok-4.5")).toBe("grok-4.5");
-    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5")).toBe("grok-4.5");
-    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-high")).toBe("grok-4.5");
-    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-low")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("grok-4.5")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("grok-4.5-high")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("grok-4.5-low")).toBe("grok-4.5");
   });
   test("grok-4 (no .5) is NOT the catalog upstream", () => {
     // The buggy probe sent this exact string. Resolve must keep it as the
@@ -468,7 +466,7 @@ describe("image helpers", () => {
     });
   });
 
-  test("owns gcli/grok-image", () => {
-    expect(grokCliOwnsModel("gcli/grok-image")).toBe(true);
+  test("owns grok-image", () => {
+    expect(grokCliOwnsModel("grok-image")).toBe(true);
   });
 });

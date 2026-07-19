@@ -6,7 +6,7 @@ import {
   invalidateGrokCliSettingsCache,
   isGrokCliSettingKey,
 } from "./settings";
-import { GROK_CLI_REFRESH_LEAD_SEC, grokCliProvider } from "./index";
+import { GROK_CLI_REFRESH_LEAD_SEC, grokProvider } from "./index";
 
 describe("grok-cli-settings", () => {
   test("defaults match prior hardcodes and single lead source", () => {
@@ -19,20 +19,22 @@ describe("grok-cli-settings", () => {
   });
 
   test("isGrokCliSettingKey only matches grok_cli_ prefix", () => {
+    expect(isGrokCliSettingKey("grok_refresh_lead_sec")).toBe(true);
     expect(isGrokCliSettingKey("grok_cli_refresh_lead_sec")).toBe(true);
+    expect(isGrokCliSettingKey("grok_max_account_retries")).toBe(true);
     expect(isGrokCliSettingKey("grok_cli_max_account_retries")).toBe(true);
     expect(isGrokCliSettingKey("compression_rtk_enabled")).toBe(false);
-    expect(isGrokCliSettingKey("provider_grok-cli_lb_method")).toBe(false);
+    expect(isGrokCliSettingKey("provider_grok_lb_method")).toBe(false);
   });
 
   test("maxAccountRetries is live cache read (no dual-store apply)", () => {
     invalidateGrokCliSettingsCache();
     // Cold cache returns defaults immediately while background load starts.
-    expect(grokCliProvider.maxAccountRetries).toBe(
+    expect(grokProvider.maxAccountRetries).toBe(
       DEFAULT_GROK_CLI_RUNTIME.maxAccountRetries,
     );
     expect(getCachedGrokCliRuntimeSettings().maxAccountRetries).toBe(
-      grokCliProvider.maxAccountRetries,
+      grokProvider.maxAccountRetries,
     );
   });
 });

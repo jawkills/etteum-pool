@@ -1,5 +1,5 @@
 /**
- * Grok CLI farm job — signup batch via http_farm.py.
+ * Grok farm job — signup batch via http_farm.py.
  * Lifecycle shared with reauth via grok-farm-process.
  */
 
@@ -139,7 +139,7 @@ class GrokFarmQueue {
             if (this.status.success > 0) {
               broadcast({
                 type: "accounts_bulk_created",
-                data: { count: this.status.success, provider: "grok-cli" },
+                data: { count: this.status.success, provider: "grok" },
               });
             }
           } else {

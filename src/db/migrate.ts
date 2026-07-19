@@ -61,7 +61,24 @@ export async function runMigrations() {
 
   // Always run idempotent column-add migrations (works on fresh deploys without drizzle/).
   await runIdempotentColumns();
+
+  // Rename provider id grok-cli → grok (hard cut of public surface).
+  await runProviderRename();
 }
+
+async function runProviderRename() {
+  try {
+    await db.run(sql.raw("UPDATE accounts SET provider = 'grok' WHERE provider = 'grok'"));
+    await db.run(sql.raw("UPDATE request_logs SET provider = 'grok' WHERE provider = 'grok'"));
+    await db.run(sql.raw("UPDATE usage_summary SET provider = 'grok' WHERE provider = 'grok'"));
+    await db.run(sql.raw("UPDATE settings SET key = 'grok_refresh_lead_sec' WHERE key = 'grok_cli_refresh_lead_sec'"));
+    await db.run(sql.raw("UPDATE settings SET key = 'grok_max_account_retries' WHERE key = 'grok_cli_max_account_retries'"));
+    console.log("[DB] Provider rename grok-cli → grok applied (idempotent)");
+  } catch (err) {
+    console.error("[DB] Provider rename failed:", err);
+  }
+}
+
 
 // Run if called directly
 if (import.meta.main) {

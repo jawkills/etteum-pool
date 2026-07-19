@@ -34,5 +34,5 @@ export function openAIImagesResponse(
   };
 }
 
-/** Free Grok CLI images do not consume local pool quota counters. */
+/** Free Grok images do not consume local pool quota counters. */
 export const GROK_CLI_IMAGE_DECREMENT_QUOTA = false;

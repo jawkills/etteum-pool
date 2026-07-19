@@ -91,7 +91,7 @@ function timeAgo(ts: number) {
   return `${d}h lalu`;
 }
 
-type ImageEngine = "canva" | "grok-cli";
+type ImageEngine = "canva" | "grok";
 
 export default function ImageStudio() {
   const [assistModels, setAssistModels] = useState<AssistModelInfo[]>([]);
@@ -164,7 +164,7 @@ export default function ImageStudio() {
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : null;
       setEditImageDataUrl(result);
-      setImageEngine("grok-cli");
+      setImageEngine("grok");
       setGenType("image");
     };
     reader.onerror = () => setError("Gagal membaca file gambar");
@@ -182,7 +182,7 @@ export default function ImageStudio() {
         n: r.n,
         chatId,
         provider: imageEngine,
-        model: imageEngine === "grok-cli" ? "gcli/grok-image" : undefined,
+        model: imageEngine === "grok" ? "grok-image" : undefined,
         image: editImageDataUrl || undefined,
       });
       const fresh: GenResult = {
@@ -353,8 +353,8 @@ export default function ImageStudio() {
       setError("Belum ada prompt — chat dulu untuk dapat final prompt, atau ketik manual di kolom input.");
       return;
     }
-    if (imageEngine === "grok-cli" && genType === "video") {
-      setError("Grok CLI hanya support image, bukan video.");
+    if (imageEngine === "grok" && genType === "video") {
+      setError("Grok hanya support image, bukan video.");
       return;
     }
     setGenerating(true);
@@ -362,12 +362,12 @@ export default function ImageStudio() {
     try {
       const res = await generateImage({
         prompt,
-        type: imageEngine === "grok-cli" ? "image" : genType,
+        type: imageEngine === "grok" ? "image" : genType,
         aspectRatio,
         n,
         chatId,
         provider: imageEngine,
-        model: imageEngine === "grok-cli" ? "gcli/grok-image" : undefined,
+        model: imageEngine === "grok" ? "grok-image" : undefined,
         image: editImageDataUrl || undefined,
       });
       const result: GenResult = {
@@ -420,7 +420,7 @@ export default function ImageStudio() {
               Image Studio
             </h1>
             <p className="text-xs text-[var(--muted-foreground)]">
-              Prompt assist + generate via Canva atau Grok CLI (free image)
+              Prompt assist + generate via Canva atau Grok (free image)
             </p>
           </div>
         </div>
@@ -490,15 +490,15 @@ export default function ImageStudio() {
               <button
                 type="button"
                 onClick={() => {
-                  setImageEngine("grok-cli");
+                  setImageEngine("grok");
                   setGenType("image");
                 }}
                 className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
-                  imageEngine === "grok-cli"
+                  imageEngine === "grok"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
-                title="Grok CLI free image"
+                title="Grok free image"
               >
                 Grok
               </button>
@@ -537,7 +537,7 @@ export default function ImageStudio() {
               </button>
             </div>
 
-            {imageEngine === "grok-cli" && (
+            {imageEngine === "grok" && (
               <>
                 <div className="h-5 w-px bg-[var(--border)]" />
                 <input

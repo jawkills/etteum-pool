@@ -1,4 +1,4 @@
-/** Shared Grok CLI env/constants (no class, no I/O).
+/** Shared Grok env/constants (no class, no I/O).
  *
  * Defaults aligned with open-source xAI Grok Build:
  * https://github.com/xai-org/grok-build
@@ -40,4 +40,4 @@ export const GROK_CLI_IMAGE_TIMEOUT_MS =
   Number(process.env.GROK_CLI_IMAGE_TIMEOUT_MS) || 180_000;
 
 /** Soft client-facing string — do not dump multi-line center bodies for credit death. */
-export const GROK_CLI_CREDIT_SOFT_ERROR = "Grok CLI credits exhausted";
+export const GROK_CLI_CREDIT_SOFT_ERROR = "Grok credits exhausted";

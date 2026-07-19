@@ -61,7 +61,7 @@ function getStatusColor(status: string): "success" | "warning" | "error" {
 function labelProvider(provider: string) {
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
-  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "grok") return "Grok";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -164,7 +164,7 @@ export default function Requests() {
           <option value="qoder">Qoder</option>
           <option value="gitlab-duo">GitLab Duo</option>
           <option value="youmind">YouMind</option>
-          <option value="grok-cli">Grok CLI</option>
+          <option value="grok">Grok</option>
           <option value="byok">BYOK</option>
         </select>
       </div>

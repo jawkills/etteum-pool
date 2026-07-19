@@ -14,7 +14,7 @@ import {
   invalidateGrokCliSettingsCache,
   isGrokCliSettingKey,
   getGrokCliRuntimeSettings,
-} from "../proxy/providers/grok-cli-settings";
+} from "../proxy/providers/grok/settings";
 
 function isProxyPoolSettingKey(key: string): boolean {
   return key === "proxy_pool_usage" || key === "proxy_pool_rotation";

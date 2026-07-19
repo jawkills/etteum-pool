@@ -1,5 +1,5 @@
 /**
- * Upstream HTTP wire for Grok CLI (chat / image / refresh).
+ * Upstream HTTP wire for Grok (chat / image / refresh).
  * Free functions — provider class only owns session policy + locks.
  */
 
@@ -29,8 +29,8 @@ import {
   normalizeGrokCliUsage,
 } from "./image";
 import { normalizeGrokCliMessagesForOpenAI } from "./messages";
-import { parseGrokCliModelId, resolveGrokCliUpstreamModel } from "./models";
-import { buildGrokCliHeaders } from "./headers";
+import { parseGrokModelId, resolveGrokUpstreamModel } from "./models";
+import { buildGrokHeaders } from "./headers";
 
 export type FetchWithTimeout = (
   url: string,
@@ -118,10 +118,10 @@ export async function grokCliUpstreamChat(
   request: ChatCompletionRequest
 ): Promise<{ response: Response; tokens: GrokCliTokens }> {
   const tokens = readGrokCliTokens(account);
-  if (!tokens?.access_token) throw new Error("No access_token for grok-cli account");
+  if (!tokens?.access_token) throw new Error("No access_token for grok account");
 
   const req = prepareGrokCliChatRequest(request);
-  const parsed = parseGrokCliModelId(req.model);
+  const parsed = parseGrokModelId(req.model);
   const model = parsed.upstream;
   const body: Record<string, unknown> = {
     ...req,
@@ -129,20 +129,19 @@ export async function grokCliUpstreamChat(
     stream: !!req.stream,
   };
   // Official grok-build rejects reasoningEffort; only attach for 4.5 family.
-  if (
-    parsed.allowReasoningEffort &&
-    parsed.effort &&
-    body.reasoning_effort == null &&
-    (body as any).reasoningEffort == null
-  ) {
+  // Model-id effort (low/medium/high/xhigh) always wins over body.
+  if (parsed.effortFromModelId && parsed.effort) {
     body.reasoning_effort = parsed.effort;
+  } else if (body.reasoning_effort != null || (body as any).reasoningEffort != null) {
+    const raw = String(body.reasoning_effort ?? (body as any).reasoningEffort).toLowerCase();
+    if (raw === "max") body.reasoning_effort = "xhigh";
   }
 
   const response = await fetchWithTimeout(
     `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
     {
       method: "POST",
-      headers: buildGrokCliHeaders({ ...tokens, email: account.email }, req.model || model),
+      headers: buildGrokHeaders({ ...tokens, email: account.email }, req.model || model),
       body: JSON.stringify(body),
     },
     config.providerRequestTimeoutMs
@@ -156,9 +155,9 @@ export async function grokCliUpstreamImage(
   opts: { prompt: string; images?: string[]; model?: string }
 ): Promise<{ response: Response; tokens: GrokCliTokens }> {
   const tokens = readGrokCliTokens(account);
-  if (!tokens?.access_token) throw new Error("No access_token for grok-cli account");
+  if (!tokens?.access_token) throw new Error("No access_token for grok account");
 
-  const model = resolveGrokCliUpstreamModel(opts.model || "gcli/grok-4.5");
+  const model = resolveGrokUpstreamModel(opts.model || "grok-4.5");
   const content: Array<Record<string, string>> = [];
   for (const imageUrl of opts.images || []) {
     content.push({ type: "input_image", image_url: imageUrl });
@@ -182,7 +181,7 @@ export async function grokCliUpstreamImage(
     `${GROK_CLI_UPSTREAM_BASE}/responses`,
     {
       method: "POST",
-      headers: buildGrokCliHeaders({ ...tokens, email: account.email }, model),
+      headers: buildGrokHeaders({ ...tokens, email: account.email }, model),
       body: JSON.stringify(body),
     },
     GROK_CLI_IMAGE_TIMEOUT_MS
@@ -288,7 +287,7 @@ export async function grokCliRunImageOnce(
     return failGrokCliImage(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok CLI image HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
+        : `Grok image HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
@@ -301,7 +300,7 @@ export async function grokCliRunImageOnce(
   try {
     data = JSON.parse(text);
   } catch {
-    return failGrokCliImage("Invalid JSON from Grok CLI image upstream");
+    return failGrokCliImage("Invalid JSON from Grok image upstream");
   }
 
   const imagesB64 = extractGrokCliImageGenerationResults(data);
@@ -394,7 +393,7 @@ export async function grokCliChatCompletion(
     return failGrokCliChat(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok CLI HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
+        : `Grok HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
@@ -407,7 +406,7 @@ export async function grokCliChatCompletion(
   try {
     data = JSON.parse(text);
   } catch {
-    return { success: false, error: "Invalid JSON from Grok CLI upstream" };
+    return { success: false, error: "Invalid JSON from Grok upstream" };
   }
 
   const usage = data.usage || {};
@@ -469,7 +468,7 @@ export async function grokCliChatCompletionStream(
     return failGrokCliChat(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok CLI stream HTTP ${response.status}: ${text.slice(0, 300)}`,
+        : `Grok stream HTTP ${response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
@@ -533,13 +532,13 @@ export async function grokCliFetchQuota(
     return { success: false, error: "No access_token" };
   }
 
-  const PROBE_MODEL = resolveGrokCliUpstreamModel("grok-4.5");
+  const PROBE_MODEL = resolveGrokUpstreamModel("grok-4.5");
   try {
     const response = await fetchWithTimeout(
       `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
       {
         method: "POST",
-        headers: buildGrokCliHeaders(
+        headers: buildGrokHeaders(
           { ...tokens, email: account.email || tokens.email },
           PROBE_MODEL
         ),
@@ -578,7 +577,7 @@ export async function grokCliFetchQuota(
     if (!response.ok) {
       return {
         success: false,
-        error: `Grok CLI quota probe HTTP ${response.status}`,
+        error: `Grok quota probe HTTP ${response.status}`,
       };
     }
   } catch (e) {

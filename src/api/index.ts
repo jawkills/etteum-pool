@@ -39,7 +39,7 @@ apiRouter.get("/providers", (c) => {
       "qoder",
       "gitlab-duo",
       "youmind",
-      "grok-cli",
+      "grok",
     ],
   });
 });

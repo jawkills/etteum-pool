@@ -85,7 +85,7 @@ function processStatusLabel(process: ProcessLog) {
 
 /** Auto-login bot path only — grok farm/reauth use Refresh/Reauth instead. */
 function isAutoLoginRetryable(log: AuthLog): boolean {
-  if (log.provider === "grok-cli") return false;
+  if (log.provider === "grok") return false;
   if (log.type?.startsWith("grok_farm_") || log.type?.startsWith("grok_reauth_")) return false;
   return true;
 }
@@ -94,7 +94,7 @@ function providerLabel(provider?: string) {
   if (!provider) return "-";
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
-  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "grok") return "Grok";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -244,7 +244,7 @@ export default function BotLogs() {
       type: msg.type,
       accountId,
       email: data.email,
-      provider: data.provider || (isGrokFarm ? "grok-cli" : undefined),
+      provider: data.provider || (isGrokFarm ? "grok" : undefined),
       step: data.step,
       message: data.message || data.error || msg.type,
       error: data.error,
@@ -344,7 +344,7 @@ export default function BotLogs() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--foreground)]">Login Logs</h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Live progress for auto-login bot and Grok CLI farm, including failed accounts.
+            Live progress for auto-login bot and Grok farm, including failed accounts.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

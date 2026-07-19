@@ -15,7 +15,7 @@ import {
   type GrokFarmPython,
 } from "./spawn";
 
-const GROK_PROVIDER: ProviderName = "grok-cli";
+const GROK_PROVIDER: ProviderName = "grok";
 
 export type GrokProcessLogEntry = {
   type: string;
@@ -77,7 +77,7 @@ export async function spawnGrokFarmChild(
 /** Auth-log + WS fanout for farm/reauth events. */
 export function emitGrokProcessLog(entry: GrokProcessLogEntry): void {
   const log = addAuthLog({
-    provider: "grok-cli",
+    provider: "grok",
     ...entry,
   });
   broadcast({
@@ -86,7 +86,7 @@ export function emitGrokProcessLog(entry: GrokProcessLogEntry): void {
       logId: log.id,
       timestamp: log.timestamp,
       type: entry.type,
-      provider: "grok-cli",
+      provider: "grok",
       email: entry.email || log.email,
       step: entry.step || log.step,
       message: entry.message || log.message,
@@ -96,7 +96,7 @@ export function emitGrokProcessLog(entry: GrokProcessLogEntry): void {
   });
 }
 
-/** Invalidate grok-cli pool after job end (typed, no `as any`). */
+/** Invalidate grok pool after job end (typed, no `as any`). */
 export function invalidateGrokCliPool(): void {
   pool.invalidate(GROK_PROVIDER);
 }

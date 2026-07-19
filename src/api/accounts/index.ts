@@ -13,13 +13,13 @@ import { activateQoderPat } from "../../proxy/providers/qoder";
 import { activateYouMindKey } from "../../proxy/providers/youmind";
 import { isPermanentRevocation, isPlaceholderPassword } from "../../proxy/account-health";
 import { proveAccountSession, applySessionProveResult } from "../../proxy/session-prove";
-import { registerGrokCliAccountRoutes } from "./grok-cli";
+import { registerGrokAccountRoutes } from "./grok";
 import { tryCreateCodeBuddyAccount } from "./codebuddy";
 
 export const accountsRouter = new Hono();
 
-// Grok CLI import / farm / reauth — dedicated module (stable /api/accounts/grok-cli/* URLs).
-registerGrokCliAccountRoutes(accountsRouter);
+// Grok import / farm / reauth — dedicated module (stable /api/accounts/grok/* URLs).
+registerGrokAccountRoutes(accountsRouter);
 
 type ByokKeyInput = {
   id?: number;
@@ -156,11 +156,11 @@ accountsRouter.get("/warmup-queue", (c) => {
 accountsRouter.get("/", async (c) => {
   const allAccounts = await db.select().from(accounts);
 
-  // Don't expose passwords in response. For grok-cli, surface hasReauthPassword
+  // Don't expose passwords in response. For grok, surface hasReauthPassword
   // so UI can enable Reauth without revealing the secret.
   const sanitized = allAccounts.map((acc) => {
     let hasReauthPassword = false;
-    if (acc.provider === "grok-cli" && acc.password) {
+    if (acc.provider === "grok" && acc.password) {
       try {
         hasReauthPassword = !isPlaceholderPassword(decrypt(acc.password));
       } catch {
@@ -1204,7 +1204,7 @@ accountsRouter.get("/:id", async (c) => {
  */
 accountsRouter.post("/", async (c) => {
   const body = await c.req.json<{
-    provider: "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok-cli";
+    provider: "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok";
     email?: string;
     password?: string;
     personalToken?: string;
@@ -1488,7 +1488,7 @@ accountsRouter.post("/instant-login", async (c) => {
 accountsRouter.post("/bulk", async (c) => {
   const body = await c.req.json<{
     accounts: Array<{
-      provider: "kiro" | "codebuddy" | "canva" | "codex" | "grok-cli";
+      provider: "kiro" | "codebuddy" | "canva" | "codex" | "grok";
       email: string;
       password: string;
     }>;

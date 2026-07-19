@@ -50,7 +50,7 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok-cli";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok";
 
 type ByokFormKey = {
   id?: number;
@@ -70,7 +70,7 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind", "grok-cli"];
+const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind", "grok"];
 
 function labelProvider(provider: string) {
   if (provider === "kiro-pro") return "Kiro Pro";
@@ -80,7 +80,7 @@ function labelProvider(provider: string) {
   if (provider === "qoder") return "Qoder";
   if (provider === "gitlab-duo") return "GitLab Duo";
   if (provider === "youmind") return "YouMind";
-  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "grok") return "Grok";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -321,7 +321,7 @@ export default function Accounts() {
       if (
         msg.type === "grok_reauth_complete" ||
         msg.type === "grok_reauth_success" ||
-        (msg.type === "accounts_updated" && (msg.data as any)?.provider === "grok-cli")
+        (msg.type === "accounts_updated" && (msg.data as any)?.provider === "grok")
       ) {
         load().catch(() => {});
       }
@@ -330,7 +330,7 @@ export default function Accounts() {
 
   useEffect(() => {
     // Always poll while farm running (banner); also while Grok dialog open
-    const dialogOpen = addDialogProvider === "grok-cli";
+    const dialogOpen = addDialogProvider === "grok";
     const running = farmStatus?.running === true;
     if (!dialogOpen && !running) {
       // one-shot fetch on mount for residual status
@@ -497,7 +497,7 @@ export default function Accounts() {
       const res = await importGrokCliAccounts({ text: bulkText }) as { imported?: number; failed?: number };
       const imported = res?.imported ?? 0;
       const failed = res?.failed ?? 0;
-      showSuccess(`Grok CLI import: ${imported} imported, ${failed} failed`);
+      showSuccess(`Grok import: ${imported} imported, ${failed} failed`);
       setBulkText("");
       setAddDialogProvider(null);
       await load();
@@ -781,7 +781,7 @@ export default function Accounts() {
     if (provider === "youmind") {
       setAddMode("pat");
     }
-    if (provider === "grok-cli") {
+    if (provider === "grok") {
       setGrokMode("farm");
       setBulkText("");
       setAddMode("bulk");
@@ -851,12 +851,12 @@ export default function Accounts() {
     await load();
   }
 
-  /** Grok CLI: server-side force OAuth refresh (no client string-matching death policy). */
+  /** Grok: server-side force OAuth refresh (no client string-matching death policy). */
   async function handleGrokRefreshTokens() {
     try {
-      showSuccess("Refreshing Grok CLI tokens (server bulk)…");
+      showSuccess("Refreshing Grok tokens (server bulk)…");
       const res = (await refreshAccountTokensBulk({
-        provider: "grok-cli",
+        provider: "grok",
         limit: 50,
         concurrency: 5,
       })) as { total?: number; ok?: number; dead?: number; fail?: number; error?: string };
@@ -873,7 +873,7 @@ export default function Accounts() {
     }
   }
 
-  /** Grok CLI: re-login dead accounts that have stored password (or GROK_PASSWORD). */
+  /** Grok: re-login dead accounts that have stored password (or GROK_PASSWORD). */
   async function handleGrokReauthDead() {
     try {
       showSuccess("Starting Grok reauth for dead accounts…");
@@ -1255,7 +1255,7 @@ export default function Accounts() {
               )}
 
               {/* Grok farm progress on card */}
-              {stat.provider === "grok-cli" && farmStatus?.running && farmStatus.target > 0 && (
+              {stat.provider === "grok" && farmStatus?.running && farmStatus.target > 0 && (
                 <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
                   <div className="flex justify-between text-xs">
                     <span className="text-[var(--muted-foreground)]">Farm</span>
@@ -1313,7 +1313,7 @@ export default function Accounts() {
                 <Button className="w-full" variant="outline" size="sm" onClick={() => handleWarmupProvider(stat.provider)} disabled={Boolean(warmupProgress[stat.provider])}>
                   <RefreshCw className="mr-1 h-4 w-4" /> Warmup
                 </Button>
-                {stat.provider === "grok-cli" ? (
+                {stat.provider === "grok" ? (
                   <div className="col-span-3 grid grid-cols-2 gap-2">
                     <Button
                       className="w-full"
@@ -1709,7 +1709,7 @@ export default function Accounts() {
                 ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
                 : addDialogProvider === "codebuddy-china"
                 ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
-                : addDialogProvider === "grok-cli"
+                : addDialogProvider === "grok"
                 ? "HTTP farm (no browser) or paste CPA JSON import. Farm needs Boterdrop :8000 + tempmail; auto-imports to pool."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
@@ -1761,7 +1761,7 @@ export default function Accounts() {
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >API Key (sk-ym-...)</button>
             </div>
-          ) : addDialogProvider === "grok-cli" ? (
+          ) : addDialogProvider === "grok" ? (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
               <button onClick={() => setGrokMode("farm")}
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${grokMode === "farm" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
@@ -1849,11 +1849,11 @@ export default function Accounts() {
             </div>
           )}
 
-          {addDialogProvider === "grok-cli" && grokMode === "farm" && (
+          {addDialogProvider === "grok" && grokMode === "farm" && (
             <div className="space-y-4">
               <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
                 <div><strong>HTTP farm automation</strong> (no browser). Same observability as Login: progress goes to <strong>Bot Logs</strong>.</div>
-                <div className="text-[var(--muted-foreground)]">Needs Boterdrop :8000 + tempmail. Each success auto-imports into the Grok CLI pool.</div>
+                <div className="text-[var(--muted-foreground)]">Needs Boterdrop :8000 + tempmail. Each success auto-imports into the Grok pool.</div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1932,7 +1932,7 @@ export default function Accounts() {
             </div>
           )}
 
-          {addDialogProvider === "grok-cli" && grokMode === "import" && (
+          {addDialogProvider === "grok" && grokMode === "import" && (
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-[var(--foreground)]">CPA JSON</label>
@@ -2181,8 +2181,8 @@ eyJhbGciOi...
             </div>
           )}
 
-          {/* Bulk mode (all providers except grok-cli JSON import) */}
-          {addMode === "bulk" && addDialogProvider !== "grok-cli" && (
+          {/* Bulk mode (all providers except Grok JSON import) */}
+          {addMode === "bulk" && addDialogProvider !== "grok" && (
             <div className="space-y-4">
               {addDialogProvider === "gitlab-duo" && (
                 <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">

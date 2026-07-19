@@ -1,6 +1,6 @@
 /**
- * Grok CLI account routes: CPA import, farm job, reauth job.
- * Mounted on accountsRouter so URLs stay /api/accounts/grok-cli/*.
+ * Grok account routes: CPA import, farm job, reauth job.
+ * Mounted on accountsRouter so URLs stay /api/accounts/grok/*.
  */
 
 import type { Hono } from "hono";
@@ -10,17 +10,17 @@ import { accounts } from "../../db/schema";
 import { encrypt } from "../../utils/crypto";
 import { broadcast } from "../../ws/index";
 import { pool, type ProviderName } from "../../proxy/pool";
-import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../../proxy/providers/grok-cli";
+import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../../proxy/providers/grok";
 import { grokFarmQueue } from "../../auth/grok-farm/farm-queue";
 import { grokReauthQueue } from "../../auth/grok-farm/reauth-queue";
 import { isPlaceholderPassword } from "../../proxy/account-health";
 
-export function registerGrokCliAccountRoutes(router: Hono): void {
+export function registerGrokAccountRoutes(router: Hono): void {
   /**
-   * POST /api/accounts/grok-cli/import - Bulk import CPA JSON tokens for grok-cli.
+   * POST /api/accounts/grok/import - Bulk import CPA JSON tokens for grok.
    * Body: { accounts?: any[]; text?: string }
    */
-  router.post("/grok-cli/import", async (c) => {
+  router.post("/grok/import", async (c) => {
     const body = await c.req.json<{ accounts?: any[]; text?: string }>();
 
     let items: any[] = [];
@@ -63,7 +63,7 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
     const existingRows = await db
       .select()
       .from(accounts)
-      .where(eq(accounts.provider, "grok-cli"));
+      .where(eq(accounts.provider, "grok"));
 
     const results: Array<{
       email?: string;
@@ -100,7 +100,7 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
         const hasRealPassword = !isPlaceholderPassword(rawPassword);
         const passwordEnc = hasRealPassword
           ? encrypt(rawPassword)
-          : encrypt("grok-cli-token-auth");
+          : encrypt("grok-token-auth");
 
         if (existing) {
           const updatePayload: Record<string, unknown> = {
@@ -129,7 +129,7 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
           const inserted = await db
             .insert(accounts)
             .values({
-              provider: "grok-cli",
+              provider: "grok",
               email: norm.email,
               password: passwordEnc,
               tokens: tokensJson as unknown,
@@ -158,17 +158,17 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
       }
     }
 
-    pool.invalidate("grok-cli" as ProviderName);
+    pool.invalidate("grok" as ProviderName);
     broadcast({
       type: "accounts_bulk_created",
-      data: { count: imported, provider: "grok-cli" },
+      data: { count: imported, provider: "grok" },
     });
 
     return c.json({ imported, failed, results });
   });
 
-  /** POST /api/accounts/grok-cli/farm */
-  router.post("/grok-cli/farm", async (c) => {
+  /** POST /api/accounts/grok/farm */
+  router.post("/grok/farm", async (c) => {
     const body = await c.req
       .json<{ count?: number; concurrent?: number }>()
       .catch(() => ({} as any));
@@ -182,18 +182,18 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
     return c.json({ data: result.status });
   });
 
-  router.get("/grok-cli/farm", (c) => {
+  router.get("/grok/farm", (c) => {
     return c.json({ data: grokFarmQueue.getStatus() });
   });
 
-  router.post("/grok-cli/farm/stop", (c) => {
+  router.post("/grok/farm/stop", (c) => {
     const result = grokFarmQueue.stop();
     if (!result.ok) return c.json({ error: result.error }, 409);
     return c.json({ data: grokFarmQueue.getStatus() });
   });
 
-  /** POST /api/accounts/grok-cli/reauth */
-  router.post("/grok-cli/reauth", async (c) => {
+  /** POST /api/accounts/grok/reauth */
+  router.post("/grok/reauth", async (c) => {
     const body = await c.req
       .json<{
         ids?: number[];
@@ -213,11 +213,11 @@ export function registerGrokCliAccountRoutes(router: Hono): void {
     return c.json({ data: result.status, skipped: result.skipped });
   });
 
-  router.get("/grok-cli/reauth", (c) => {
+  router.get("/grok/reauth", (c) => {
     return c.json({ data: grokReauthQueue.getStatus() });
   });
 
-  router.post("/grok-cli/reauth/stop", (c) => {
+  router.post("/grok/reauth/stop", (c) => {
     const result = grokReauthQueue.stop();
     if (!result.ok) return c.json({ error: result.error }, 409);
     return c.json({ data: grokReauthQueue.getStatus() });
