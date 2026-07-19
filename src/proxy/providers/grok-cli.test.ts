@@ -16,6 +16,8 @@ import {
   stripGrokCliDataUrlPrefix,
   parseGrokCliRateLimitHeaders,
   parseGrokCliExhaustedBody,
+  normalizeGrokCliMessagesForOpenAI,
+  grokCliContentBlocksToText,
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
   GROK_CLI_CREDIT_SOFT_ERROR,
@@ -284,6 +286,88 @@ describe("quota probe model (regression)", () => {
     // catalog upstream; rejecting "grok-4" is the provider's job upstream,
     // but the probe body must use what resolve returns for a catalog id.
     expect(resolveGrokCliUpstreamModel("grok-4.5")).not.toBe("grok-4");
+  });
+});
+
+describe("normalizeGrokCliMessagesForOpenAI", () => {
+  // Live Claude Code body that triggered:
+  //   400 invalid-argument Empty content block
+  // because content was Anthropic block array, not a plain string.
+  test("flattens Claude Code text block arrays to strings", () => {
+    const out = normalizeGrokCliMessagesForOpenAI([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "<system-reminder>\nToday\n</system-reminder>\n\n" },
+          { type: "text", text: "test" },
+        ],
+      },
+      {
+        role: "system",
+        content: "Available agent types…",
+      },
+    ] as any);
+    expect(out).toEqual([
+      {
+        role: "user",
+        content: "<system-reminder>\nToday\n</system-reminder>\n\n\ntest",
+      },
+      { role: "system", content: "Available agent types…" },
+    ]);
+  });
+
+  test("passthrough plain string content", () => {
+    const out = normalizeGrokCliMessagesForOpenAI([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ] as any);
+    expect(out).toEqual([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ]);
+  });
+
+  test("lifts Anthropic tool_use + tool_result into OpenAI shape", () => {
+    const out = normalizeGrokCliMessagesForOpenAI([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "calling tool" },
+          { type: "tool_use", id: "call_1", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "call_1", content: "file.txt" },
+          { type: "text", text: "continue" },
+        ],
+      },
+    ] as any);
+    expect(out[0]).toEqual({
+      role: "assistant",
+      content: "calling tool",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "Bash", arguments: JSON.stringify({ command: "ls" }) },
+        },
+      ],
+    });
+    expect(out[1]).toEqual({ role: "tool", tool_call_id: "call_1", content: "file.txt" });
+    expect(out[2]).toEqual({ role: "user", content: "continue" });
+  });
+
+  test("grokCliContentBlocksToText joins text parts", () => {
+    expect(
+      grokCliContentBlocksToText([
+        { type: "text", text: "a" },
+        { type: "text", text: "b" },
+      ])
+    ).toBe("a\nb");
+    expect(grokCliContentBlocksToText("plain")).toBe("plain");
+    expect(grokCliContentBlocksToText(null)).toBe("");
   });
 });
 
