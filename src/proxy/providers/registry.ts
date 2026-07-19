@@ -8,7 +8,7 @@ import { QoderProvider } from "./qoder";
 import { ByokProvider } from "./byok";
 import { GitlabDuoProvider } from "./gitlab-duo";
 import { YouMindProvider } from "./youmind";
-import { GrokCliProvider } from "./grok-cli";
+import { grokCliProvider as grokCli } from "./grok-cli";
 
 /**
  * Single source of truth for the provider set.
@@ -35,17 +35,17 @@ const qoder = new QoderProvider();
 const byok = new ByokProvider();
 const gitlabDuo = new GitlabDuoProvider();
 const youmind = new YouMindProvider();
-const grokCli = new GrokCliProvider();
+	// grokCli is the shared singleton from grok-cli.ts (settings apply to it).
 
-// Priority order. canva/qoder/codex/kiro-pro/youmind have unique prefixes; codex
-// is listed before codebuddy so the literal "gpt-5-codex" resolves to codex
-// while codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks
-// dynamic prefixes from DB accounts. kiro is the fallback. gitlab-duo owns
-// `claude_(haiku|sonnet|opus)_<digit>...` underscore-style identifiers — no
-// overlap with any other provider, so position is not load-bearing. youmind
-// owns the `ym-*` prefix exclusively — also position-independent, but slotted
-// alongside the other prefix-based providers for readability.
-const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, grokCli, byok, codebuddyChina, codebuddy, kiro] as const;
+	// Priority order. canva/qoder/codex/kiro-pro/youmind have unique prefixes; codex
+	// is listed before codebuddy so the literal "gpt-5-codex" resolves to codex
+	// while codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks
+	// dynamic prefixes from DB accounts. kiro is the fallback. gitlab-duo owns
+	// `claude_(haiku|sonnet|opus)_<digit>...` underscore-style identifiers — no
+	// overlap with any other provider, so position is not load-bearing. youmind
+	// owns the `ym-*` prefix exclusively — also position-independent, but slotted
+	// alongside the other prefix-based providers for readability.
+	const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, grokCli, byok, codebuddyChina, codebuddy, kiro] as const;
 
 export const providers = {
   kiro,

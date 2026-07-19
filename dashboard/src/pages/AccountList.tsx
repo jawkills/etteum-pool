@@ -410,7 +410,12 @@ export default function AccountList() {
   const filtered = useMemo(() => {
     let result = accounts.filter((a) => a.email.toLowerCase().includes(search.toLowerCase()));
     if (statusFilter !== "all") {
-      result = result.filter((a) => a.status === statusFilter);
+      // "disabled" is the enabled flag, not a status column value.
+      if (statusFilter === "disabled") {
+        result = result.filter((a) => a.enabled === false);
+      } else {
+        result = result.filter((a) => a.status === statusFilter);
+      }
     }
     result.sort((a, b) => {
       let cmp = 0;

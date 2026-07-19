@@ -36,6 +36,9 @@ export default function Settings() {
     auto_warmup_interval_minutes: "15",
     proxy_pool_usage: "all",
     proxy_pool_rotation: "round_robin",
+    // Grok CLI runtime — keep defaults in sync with grok-cli-settings.ts
+    grok_cli_refresh_lead_sec: String(45 * 60),
+    grok_cli_max_account_retries: "8",
     // Compression defaults — keep in sync with DEFAULT_COMPRESSION_CONFIG.
     compression_rtk_enabled: "true",
     compression_rtk_max_tool_chars: "4000",
@@ -286,6 +289,51 @@ export default function Settings() {
             <p className="text-xs text-[var(--muted-foreground)]">
               Auto WarmUp checks accounts with status active, exhausted, or error (skips pending). Enable/disable per provider on the Accounts page.
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Grok CLI */}
+        <Card className="border-[var(--border)]">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Zap className="w-4 h-4 text-[var(--primary)]" />
+              Grok CLI
+            </CardTitle>
+            <CardDescription>
+              OAuth refresh lead window and per-request account retry budget for gcli/* models
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">
+                Refresh lead (seconds)
+              </label>
+              <Input
+                type="number"
+                min={60}
+                max={86400}
+                value={form.grok_cli_refresh_lead_sec || ""}
+                onChange={(e) => setValue("grok_cli_refresh_lead_sec", e.target.value)}
+              />
+              <p className="text-xs text-[var(--muted-foreground)]">
+                Proactively refresh access tokens when remaining lifetime is below this. Default 2700 (45 min). Farm/Reauth still use stored passwords separately.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">
+                Max account retries
+              </label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={form.grok_cli_max_account_retries || ""}
+                onChange={(e) => setValue("grok_cli_max_account_retries", e.target.value)}
+              />
+              <p className="text-xs text-[var(--muted-foreground)]">
+                How many different grok-cli accounts the router tries per request before giving up. Higher helps large farms with many dead tokens still marked active. Default 8.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

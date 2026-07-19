@@ -1294,7 +1294,7 @@ export default function Accounts() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleGrokRefreshTokens()}
-                      title="Force OAuth refresh_token (server bulk, max 50). Skips permanent invalid_grant."
+                      title="Force OAuth refresh_token (server bulk, max 50). Permanent invalid_grant is skipped/marked dead; missing-token accounts stay reauthable."
                     >
                       <RotateCcw className="mr-1 h-4 w-4" /> Refresh tok
                     </Button>
@@ -1304,7 +1304,7 @@ export default function Accounts() {
                       size="sm"
                       onClick={() => handleGrokReauthDead()}
                       disabled={stat.error === 0}
-                      title="Re-login dead accounts with stored password (or GROK_PASSWORD). Farm = new accounts; Reauth = revive existing."
+                      title="Re-login dead accounts with stored password (or GROK_PASSWORD). Farm = create new accounts; Reauth = revive existing. Needs real password (not grok-cli-token-auth placeholder)."
                     >
                       <RotateCcw className="mr-1 h-4 w-4" /> Reauth dead
                     </Button>
@@ -1899,8 +1899,8 @@ export default function Accounts() {
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
                   className="mt-1 w-full h-48 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
-                  placeholder={`// flat
-{"email":"a@x.com","access_token":"...","refresh_token":"...","id_token":"..."}
+                  placeholder={`// flat (+ optional password for later Reauth)
+{"email":"a@x.com","access_token":"...","refresh_token":"...","password":"secret"}
 
 // nested harvest
 {"email":"b@x.com","tokens":{"access_token":"...","refresh_token":"..."}}
@@ -1909,7 +1909,7 @@ export default function Accounts() {
                   disabled={grokCliBusy}
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Accepts single object, JSON array, or NDJSON. Required: <code>email</code>, <code>access_token</code>, <code>refresh_token</code> (camelCase keys OK). Nested <code>tokens</code> harvest format supported.
+                  Accepts single object, JSON array, or NDJSON. Required: <code>email</code>, <code>access_token</code>, <code>refresh_token</code> (camelCase keys OK). Nested <code>tokens</code> harvest format supported. Optional <code>password</code> / <code>xai_password</code> is stored encrypted for <strong>Reauth</strong> (not shown in list API).
                 </p>
               </div>
               <div className="flex justify-end gap-2">

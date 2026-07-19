@@ -10,6 +10,11 @@ import {
   invalidateCompressionCache,
   isCompressionSettingKey,
 } from "../proxy/compression";
+import {
+  invalidateGrokCliSettingsCache,
+  isGrokCliSettingKey,
+  getGrokCliRuntimeSettings,
+} from "../proxy/providers/grok-cli-settings";
 
 function isProxyPoolSettingKey(key: string): boolean {
   return key === "proxy_pool_usage" || key === "proxy_pool_rotation";
@@ -95,6 +100,11 @@ proxySettingsRouter.put("/:key", async (c) => {
     invalidateCompressionCache();
   }
 
+  if (isGrokCliSettingKey(key)) {
+    invalidateGrokCliSettingsCache();
+    void getGrokCliRuntimeSettings();
+  }
+
   return c.json({ key, value: body.value });
 });
 
@@ -125,6 +135,7 @@ proxySettingsRouter.put("/", async (c) => {
   let warmupTouched = false;
   let proxyPoolTouched = false;
   let compressionTouched = false;
+  let grokCliTouched = false;
   for (const [key, value] of Object.entries(body)) {
     const existing = await db
       .select()
@@ -152,12 +163,19 @@ proxySettingsRouter.put("/", async (c) => {
     if (isCompressionSettingKey(key)) {
       compressionTouched = true;
     }
+    if (isGrokCliSettingKey(key)) {
+      grokCliTouched = true;
+    }
   }
 
   if (lbCacheTouched) pool.invalidateLoadBalancingCache();
   if (proxyPoolTouched) invalidateProxySettingsCache();
   if (warmupTouched) void autoWarmupScheduler.reload();
   if (compressionTouched) invalidateCompressionCache();
+  if (grokCliTouched) {
+    invalidateGrokCliSettingsCache();
+    void getGrokCliRuntimeSettings();
+  }
 
   return c.json({ success: true, updated: Object.keys(body).length });
 });

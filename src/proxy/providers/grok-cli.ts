@@ -14,6 +14,7 @@ import {
   parseExpiresAtSec,
 } from "../account-health";
 import type { ProveMode, SessionProveResult } from "../session-prove";
+import { getCachedGrokCliRuntimeSettings } from "./grok-cli-settings";
 
 export const GROK_CLI_TOKEN_LIMIT = 2_000_000;
 export const GROK_CLI_UPSTREAM_BASE =
@@ -287,7 +288,7 @@ export function parseGrokCliExpiresAt(raw: string | number | undefined | null): 
 /** True if access token should be refreshed before calling upstream. */
 export function grokCliNeedsProactiveRefresh(
   tokens: GrokCliTokens,
-  leadSec = GROK_CLI_REFRESH_LEAD_SEC,
+  leadSec: number = getCachedGrokCliRuntimeSettings().refreshLeadSec,
   nowSec = Math.floor(Date.now() / 1000)
 ): boolean {
   const expSec = parseGrokCliExpiresAt(tokens.expires_at);
@@ -301,8 +302,11 @@ export class GrokCliProvider extends BaseProvider {
   name = "grok-cli";
   override nativeFormat: "openai" | "anthropic" = "openai";
   override isFallback = false;
-  /** Large farms often have many revoked tokens still marked active. */
-  override maxAccountRetries = 8;
+  /**
+   * Large farms often have many revoked tokens still marked active.
+   * Updated from settings key grok_cli_max_account_retries (see applyGrokCliRuntimeSettings).
+   */
+  override maxAccountRetries = getCachedGrokCliRuntimeSettings().maxAccountRetries;
 
   private refreshLocks = new Map<number, Promise<RefreshResult>>();
 
@@ -1084,4 +1088,13 @@ export class GrokCliProvider extends BaseProvider {
 }
 
 export const grokCliProvider = new GrokCliProvider();
+
+/** Apply cached/loaded runtime settings onto the singleton provider. */
+export function applyGrokCliRuntimeSettings(settings?: {
+  refreshLeadSec: number;
+  maxAccountRetries: number;
+}): void {
+  const s = settings ?? getCachedGrokCliRuntimeSettings();
+  grokCliProvider.maxAccountRetries = s.maxAccountRetries;
+}
 
