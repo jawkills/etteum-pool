@@ -121,9 +121,8 @@ export default function Accounts() {
   const [farmConcurrent, setFarmConcurrent] = useState(2);
   const [farmStatus, setFarmStatus] = useState<GrokFarmStatus | null>(null);
   const [farmBusy, setFarmBusy] = useState(false);
-  const [codebuddyChinaApiKey, setCodebuddyChinaApiKey] = useState("");
-  const [codebuddyChinaBulkApiKeys, setCodebuddyChinaBulkApiKeys] = useState("");
-  const [codebuddyChinaBusy, setCodebuddyChinaBusy] = useState(false);
+  const [codebuddyBulkApiKeys, setCodebuddyBulkApiKeys] = useState("");
+  const [codebuddyApiKeyBusy, setCodebuddyApiKeyBusy] = useState(false);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
   const [loginPendingConcurrency, setLoginPendingConcurrency] = useState(2);
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
@@ -516,62 +515,41 @@ export default function Accounts() {
     finally { setFarmBusy(false); }
   }
 
-  async function handleCodebuddyChinaApiKeyLogin() {
-    const apiKey = codebuddyChinaApiKey.trim();
-    if (!apiKey) { showError(new Error("Paste CodeBuddy China API key")); return; }
-    if (!apiKey.startsWith("ck_")) {
-      showError(new Error("CodeBuddy China API key must start with ck_"));
-      return;
-    }
-    setCodebuddyChinaBusy(true);
-    try {
-      const res = await fetchApi<any>("/api/accounts", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: "codebuddy-china",
-          apiKey,
-        }),
-      });
-      const labelText = res?.email || "account";
-      showSuccess(res?.updated
-        ? `CodeBuddy CN key updated (${labelText})`
-        : `CodeBuddy CN ${labelText} added successfully`);
-      setCodebuddyChinaApiKey("");
-      setAddDialogProvider(null);
-      await load();
-    } catch (err) { showError(err); }
-    finally { setCodebuddyChinaBusy(false); }
-  }
+  async function handleCodeBuddyBulkApiKey(provider: "codebuddy" | "codebuddy-china") {
+    const keysText = codebuddyBulkApiKeys.trim();
+    const label = provider === "codebuddy-china" ? "CodeBuddy China" : "CodeBuddy";
+    if (!keysText) { showError(new Error(`Paste ${label} API keys`)); return; }
 
-  async function handleCodeBuddyChinaBulkApiKey() {
-    const keysText = codebuddyChinaBulkApiKeys.trim();
-    if (!keysText) { showError(new Error("Paste CodeBuddy China API keys")); return; }
-    
     const keys = keysText.split("\n").map(k => k.trim()).filter(Boolean);
     if (keys.length === 0) { showError(new Error("No valid API keys found")); return; }
-    
-    for (const key of keys) {
-      if (!key.startsWith("ck_")) {
-        showError(new Error(`Invalid API key format: ${key} (must start with ck_)`));
-        return;
-      }
+
+    // Never echo key material into toasts — only report line numbers.
+    const badLines: number[] = [];
+    keys.forEach((key, i) => {
+      if (!key.startsWith("ck_")) badLines.push(i + 1);
+    });
+    if (badLines.length > 0) {
+      showError(new Error(
+        `Invalid API key format on line ${badLines.join(", ")} (must start with ck_)`,
+      ));
+      return;
     }
 
-    setCodebuddyChinaBusy(true);
+    setCodebuddyApiKeyBusy(true);
     try {
       const res = await fetchApi<any>("/api/accounts", {
         method: "POST",
         body: JSON.stringify({
-          provider: "codebuddy-china",
+          provider,
           apiKeys: keysText,
         }),
       });
-      showSuccess(`Added ${res.count} CodeBuddy CN account(s) successfully`);
-      setCodebuddyChinaBulkApiKeys("");
+      showSuccess(`Added ${res.count} ${label} account(s) successfully`);
+      setCodebuddyBulkApiKeys("");
       setAddDialogProvider(null);
       await load();
     } catch (err) { showError(err); }
-    finally { setCodebuddyChinaBusy(false); }
+    finally { setCodebuddyApiKeyBusy(false); }
   }
 
   async function handleBulkImport() {
@@ -766,6 +744,12 @@ export default function Accounts() {
       setBulkText("");
       setAddMode("bulk");
     }
+    if (provider === "codebuddy-china") {
+      setAddMode("apikey");
+    }
+    if (provider === "codebuddy") {
+      setAddMode("bulk");
+    }
     setAddDialogProvider(provider);
   }
 
@@ -775,7 +759,7 @@ export default function Accounts() {
     if (state) {
       stopCodexOAuth(state).catch(() => {});
     }
-    setCodebuddyChinaBulkApiKeys("");
+    setCodebuddyBulkApiKeys("");
     setAddDialogProvider(null);
   }
 
@@ -1750,6 +1734,18 @@ export default function Accounts() {
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >Bulk API Key (ck_...)</button>
             </div>
+          ) : addDialogProvider === "codebuddy" ? (
+            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+              <button onClick={() => setAddMode("bulk")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Bulk (Email|Pass)</button>
+              <button onClick={() => setAddMode("single")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Single</button>
+              <button onClick={() => setAddMode("apikey")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Bulk API Key (ck_...)</button>
+            </div>
           ) : (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
               <button onClick={() => setAddMode("bulk")}
@@ -1975,28 +1971,41 @@ export default function Accounts() {
             </div>
           )}
 
-          {addMode === "apikey" && addDialogProvider === "codebuddy-china" && (
+          {addMode === "apikey" && (addDialogProvider === "codebuddy-china" || addDialogProvider === "codebuddy") && (
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-[var(--foreground)]">API Keys (satu per baris, prefix ck_)</label>
                 <textarea
-                  value={codebuddyChinaBulkApiKeys}
-                  onChange={(e) => setCodebuddyChinaBulkApiKeys(e.target.value)}
+                  value={codebuddyBulkApiKeys}
+                  onChange={(e) => setCodebuddyBulkApiKeys(e.target.value)}
                   className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
                   placeholder="ck_fpigz68zr75s...
 ck_abc123def456...
 ck_xyz789ghi012..."
-                  disabled={codebuddyChinaBusy}
+                  disabled={codebuddyApiKeyBusy}
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Paste satu atau lebih CodeBuddy China API key (prefix <code>ck_</code>), satu per baris. 
-                  Model tersedia: <code>cbc-deepseek-v3</code>, <code>cbc-claude-haiku-4.5</code>, <code>cbc-kimi-k2.5</code>, dll.
+                  {addDialogProvider === "codebuddy-china" ? (
+                    <>
+                      Paste satu atau lebih CodeBuddy China API key (prefix <code>ck_</code>), satu per baris.
+                      Model tersedia: <code>cbc-deepseek-v3</code>, <code>cbc-claude-haiku-4.5</code>, <code>cbc-kimi-k2.5</code>, dll.
+                    </>
+                  ) : (
+                    <>
+                      Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris.
+                      Model tersedia: <code>cb-opus-4.8</code>, <code>cb-sonnet-4.6</code>, <code>cb-gpt-5.1</code>, dll.
+                      Email|password automation tetap ada di tab Bulk/Single.
+                    </>
+                  )}
                 </p>
               </div>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyChinaBusy}>Cancel</Button>
-                <Button onClick={handleCodeBuddyChinaBulkApiKey} disabled={codebuddyChinaBusy || !codebuddyChinaBulkApiKeys.trim()}>
-                  {codebuddyChinaBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyApiKeyBusy}>Cancel</Button>
+                <Button
+                  onClick={() => handleCodeBuddyBulkApiKey(addDialogProvider === "codebuddy" ? "codebuddy" : "codebuddy-china")}
+                  disabled={codebuddyApiKeyBusy || !codebuddyBulkApiKeys.trim()}
+                >
+                  {codebuddyApiKeyBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
                 </Button>
               </div>
             </div>

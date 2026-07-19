@@ -1207,7 +1207,7 @@ accountsRouter.post("/", async (c) => {
     password?: string;
     personalToken?: string;
     apiKey?: string; // YouMind sk-ym-... key
-    apiKeys?: string; // CodeBuddy China bulk: newline-separated ck_... keys
+    apiKeys?: string; // CodeBuddy (global + China) bulk: newline-separated ck_... keys
     tokens?: Record<string, unknown>;
     status?: "active" | "pending";
     browserEngine?: string;
@@ -1317,10 +1317,13 @@ accountsRouter.post("/", async (c) => {
     }
   }
 
-  // ── CodeBuddy China: Bulk API key flow (ck_...) ─────────────────────
+  // ── CodeBuddy (global + China): Bulk API key flow (ck_...) ───────────
   // Accept multiple API keys (one per line), validate format, and create
   // account per key with auto-generated email label.
-  if (body.provider === "codebuddy-china" && body.apiKeys) {
+  // Global (codebuddy) and China share the same ck_ prefix + token shape;
+  // labels differ so list views stay distinguishable.
+  if ((body.provider === "codebuddy" || body.provider === "codebuddy-china") && body.apiKeys) {
+    const provider = body.provider;
     const keys = body.apiKeys
       .split("\n")
       .map((k: string) => k.trim())
@@ -1330,28 +1333,29 @@ accountsRouter.post("/", async (c) => {
       return c.json({ error: "apiKeys is empty" }, 400);
     }
 
-    // Validate format
-    for (const key of keys) {
-      if (!key.startsWith("ck_")) {
-        return c.json({ error: `Invalid API key format: ${key.substring(0, 20)}... (must start with ck_)` }, 400);
+    // Validate format — report line numbers only (never echo key material).
+    for (let i = 0; i < keys.length; i++) {
+      if (!keys[i]!.startsWith("ck_")) {
+        return c.json({ error: `Invalid API key format on line ${i + 1} (must start with ck_)` }, 400);
       }
     }
 
     const created: Array<{ id: number; email: string }> = [];
     const existingCount = await db.select().from(accounts)
-      .where(eq(accounts.provider, "codebuddy-china"))
+      .where(eq(accounts.provider, provider))
       .then((rows) => rows.length);
+    const emailPrefix = provider === "codebuddy-china" ? "cbc-account" : "cb-account";
 
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i]!;
-      const email = `cbc-account-${existingCount + i + 1}`;
+      const email = `${emailPrefix}-${existingCount + i + 1}`;
       const encryptedKey = encrypt(key);
 
       // Store API key in BOTH password (for encryption) and tokens (for provider to read)
       const tokens = JSON.stringify({ api_key: key });
 
       const inserted = await db.insert(accounts).values({
-        provider: "codebuddy-china",
+        provider,
         email,
         password: encryptedKey,
         status: "active",
@@ -1366,8 +1370,8 @@ accountsRouter.post("/", async (c) => {
       }
     }
 
-    pool.invalidate("codebuddy-china" as any);
-    broadcast({ type: "account_created", data: { provider: "codebuddy-china", count: created.length } });
+    pool.invalidate(provider as any);
+    broadcast({ type: "account_created", data: { provider, count: created.length } });
 
     return c.json({
       success: true,
