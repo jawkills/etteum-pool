@@ -552,6 +552,34 @@ export default function Accounts() {
     finally { setCodebuddyApiKeyBusy(false); }
   }
 
+  async function handleCodeBuddySessionImport() {
+    const raw = cookieValue.trim();
+    if (!raw) { showError(new Error("Paste CodeBuddy JWT, ck_ key, or session JSON")); return; }
+    setCodebuddyApiKeyBusy(true);
+    try {
+      let session: unknown = raw;
+      if (raw.startsWith("{") || raw.startsWith("[")) {
+        try { session = JSON.parse(raw); }
+        catch { showError(new Error("Invalid JSON session payload")); return; }
+      }
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy",
+          session,
+          email: addForm.email.trim() || undefined,
+        }),
+      });
+      showSuccess(res?.updated
+        ? `CodeBuddy session updated (${res.email || "account"})`
+        : `CodeBuddy ${res?.email || "session"} added`);
+      setCookieValue("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyApiKeyBusy(false); }
+  }
+
   async function handleBulkImport() {
     if (!addDialogProvider || !bulkText.trim()) { showError(new Error("Paste email|password lines")); return; }
     try {
@@ -1745,6 +1773,9 @@ export default function Accounts() {
               <button onClick={() => setAddMode("apikey")}
                 className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >Bulk API Key (ck_...)</button>
+              <button onClick={() => setAddMode("pat")}
+                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Session / JWT</button>
             </div>
           ) : (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
@@ -1993,8 +2024,8 @@ ck_xyz789ghi012..."
                   ) : (
                     <>
                       Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris.
-                      Model tersedia: <code>cb-opus-4.8</code>, <code>cb-sonnet-4.6</code>, <code>cb-gpt-5.1</code>, dll.
-                      Email|password automation tetap ada di tab Bulk/Single.
+                      Catalog: CLI <code>/model</code> (Gemini/GPT-codex/DeepSeek/GLM/Kimi) + Claude haiku/sonnet/opus-4.6.
+                      Untuk parity penuh dengan CLI login, pakai tab <strong>Session / JWT</strong>.
                     </>
                   )}
                 </p>
@@ -2006,6 +2037,48 @@ ck_xyz789ghi012..."
                   disabled={codebuddyApiKeyBusy || !codebuddyBulkApiKeys.trim()}
                 >
                   {codebuddyApiKeyBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "pat" && addDialogProvider === "codebuddy" && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-[var(--foreground)]">Session / JWT / auth.info JSON</label>
+                <textarea
+                  value={cookieValue}
+                  onChange={(e) => setCookieValue(e.target.value)}
+                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  placeholder={`// raw JWT access token
+eyJhbGciOi...
+
+// or CLI-style
+{"auth":{"accessToken":"...","refreshToken":"..."},"account":{"email":"you@x.com","uid":"..."}}
+
+// or
+{"access_token":"...","refresh_token":"...","email":"you@x.com"}`}
+                  disabled={codebuddyApiKeyBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Import credential yang sama dengan CodeBuddy CLI (JWT session), bukan cuma <code>ck_</code>.
+                  Optional email di field Single form dipakai sebagai label unik.
+                </p>
+              </div>
+              <div>
+                <label className="text-sm text-[var(--foreground)]">Label email (opsional)</label>
+                <Input
+                  value={addForm.email}
+                  onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="you@x.com or leave blank for auto"
+                  className="mt-1"
+                  disabled={codebuddyApiKeyBusy}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyApiKeyBusy}>Cancel</Button>
+                <Button onClick={handleCodeBuddySessionImport} disabled={codebuddyApiKeyBusy || !cookieValue.trim()}>
+                  {codebuddyApiKeyBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Import Session"}
                 </Button>
               </div>
             </div>

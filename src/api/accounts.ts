@@ -1208,7 +1208,13 @@ accountsRouter.post("/", async (c) => {
     personalToken?: string;
     apiKey?: string; // YouMind sk-ym-... key
     apiKeys?: string; // CodeBuddy (global + China) bulk: newline-separated ck_... keys
-    tokens?: Record<string, unknown>;
+    /** CodeBuddy session/JWT import (object, JSON string, or CLI auth.info) */
+    session?: unknown;
+    accessToken?: string;
+    access_token?: string;
+    refreshToken?: string;
+    refresh_token?: string;
+    tokens?: Record<string, unknown> | string;
     status?: "active" | "pending";
     browserEngine?: string;
     headless?: boolean;
@@ -1322,6 +1328,8 @@ accountsRouter.post("/", async (c) => {
   // account per key with auto-generated email label.
   // Global (codebuddy) and China share the same ck_ prefix + token shape;
   // labels differ so list views stay distinguishable.
+  // IMPORTANT: drizzle tokens column is mode:"json" — pass an object, never
+  // JSON.stringify (that double-encodes and breaks getTokens after one parse).
   if ((body.provider === "codebuddy" || body.provider === "codebuddy-china") && body.apiKeys) {
     const provider = body.provider;
     const keys = body.apiKeys
@@ -1352,7 +1360,7 @@ accountsRouter.post("/", async (c) => {
       const encryptedKey = encrypt(key);
 
       // Store API key in BOTH password (for encryption) and tokens (for provider to read)
-      const tokens = JSON.stringify({ api_key: key });
+      const tokens = { api_key: key };
 
       const inserted = await db.insert(accounts).values({
         provider,
@@ -1378,6 +1386,74 @@ accountsRouter.post("/", async (c) => {
       count: created.length,
       accounts: created,
     }, 201);
+  }
+
+  // ── CodeBuddy global: session / JWT import (CLI parity) ─────────────
+  // Accept access_token JWT (or full auth.info / {tokens}) so pool can use
+  // the same credential path as CodeBuddy CLI, not only opaque ck_ keys.
+  if (body.provider === "codebuddy" && (body.session || body.accessToken || body.access_token || body.tokens)) {
+    const { normalizeCodeBuddySessionImport } = await import("../proxy/providers/codebuddy-auth");
+    const raw =
+      body.session ??
+      body.tokens ??
+      (body.accessToken || body.access_token
+        ? {
+            access_token: body.accessToken || body.access_token,
+            refresh_token: body.refreshToken || body.refresh_token,
+            email: body.email,
+          }
+        : null);
+    const normalized = normalizeCodeBuddySessionImport(raw);
+    if ("error" in normalized) {
+      return c.json({ error: normalized.error }, 400);
+    }
+
+    const bearer =
+      normalized.tokens.api_key ||
+      normalized.tokens.access_token ||
+      normalized.tokens.session_token ||
+      "";
+    if (!bearer) return c.json({ error: "no usable token in session payload" }, 400);
+
+    const email =
+      (typeof body.email === "string" && body.email.trim()) ||
+      normalized.email ||
+      `cb-session-${Date.now().toString(36)}`;
+
+    const existing = await db.select().from(accounts)
+      .where(eq(accounts.email, email))
+      .then((rows) => rows.find((r) => r.provider === "codebuddy"));
+
+    const encryptedPlaceholder = encrypt(bearer.startsWith("ck_") ? bearer : "session-jwt");
+
+    if (existing) {
+      await db.update(accounts).set({
+        password: encryptedPlaceholder,
+        status: "active",
+        tokens: normalized.tokens as unknown,
+        errorMessage: null,
+        lastLoginAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(accounts.id, existing.id));
+      pool.invalidate("codebuddy");
+      broadcast({ type: "account_updated", data: { id: existing.id, provider: "codebuddy", status: "active" } });
+      return c.json({ id: existing.id, provider: "codebuddy", email, status: "active", updated: true }, 200);
+    }
+
+    const inserted = await db.insert(accounts).values({
+      provider: "codebuddy",
+      email,
+      password: encryptedPlaceholder,
+      status: "active",
+      tokens: normalized.tokens as unknown,
+      quotaLimit: -1,
+      quotaRemaining: -1,
+      lastLoginAt: new Date(),
+    }).returning();
+    const created = inserted[0]!;
+    pool.invalidate("codebuddy");
+    broadcast({ type: "account_created", data: { id: created.id, provider: "codebuddy", email } });
+    return c.json({ ...created, password: "***", tokens: "[set]" }, 201);
   }
 
   if (!body.email || !body.password) {

@@ -3,7 +3,9 @@ import {
   CODEBUDDY_CREDIT_SOFT_ERROR,
   classifyCodeBuddyHttpFailure,
   isCodeBuddyCreditDeath,
+  normalizeCodeBuddySessionImport,
   parseCodeBuddyResourceQuota,
+  parseCodeBuddyTokens,
   resolveCodeBuddyUserId,
 } from "./codebuddy-auth";
 
@@ -69,6 +71,36 @@ describe("classifyCodeBuddyHttpFailure", () => {
     const r = classifyCodeBuddyHttpFailure(401, "nope");
     expect(r.sessionExpired).toBe(true);
     expect(r.quotaExhausted).toBeUndefined();
+  });
+});
+
+describe("parseCodeBuddyTokens", () => {
+  test("unwraps double-encoded JSON string", () => {
+    const once = JSON.stringify({ api_key: "ck_abc" });
+    const twice = JSON.stringify(once);
+    expect(parseCodeBuddyTokens(twice)?.api_key).toBe("ck_abc");
+    expect(parseCodeBuddyTokens(once)?.api_key).toBe("ck_abc");
+    expect(parseCodeBuddyTokens({ api_key: "ck_abc" })?.api_key).toBe("ck_abc");
+  });
+});
+
+describe("normalizeCodeBuddySessionImport", () => {
+  test("accepts JWT string and CLI auth.info", () => {
+    const jwt = makeJwt({ sub: "a1b2c3d4-e5f6-7890-abcd-ef1234567890" });
+    const fromJwt = normalizeCodeBuddySessionImport(jwt);
+    expect("tokens" in fromJwt && fromJwt.tokens.access_token).toBe(jwt);
+
+    const fromAuth = normalizeCodeBuddySessionImport({
+      auth: { accessToken: jwt, refreshToken: "r" },
+      account: { email: "u@x.com", uid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890" },
+    });
+    expect("tokens" in fromAuth && fromAuth.tokens.access_token).toBe(jwt);
+    expect("email" in fromAuth && fromAuth.email).toBe("u@x.com");
+  });
+
+  test("accepts ck_ api key", () => {
+    const r = normalizeCodeBuddySessionImport("ck_fpigz68zr75s");
+    expect("tokens" in r && r.tokens.api_key).toBe("ck_fpigz68zr75s");
   });
 });
 

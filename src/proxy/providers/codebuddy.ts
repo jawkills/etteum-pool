@@ -12,9 +12,13 @@ import { config } from "../../config";
 import {
   applyCodeBuddyUserIdHeader,
   classifyCodeBuddyHttpFailure,
+  codeBuddyBearerFromTokens,
   parseCodeBuddyResourceQuota,
+  parseCodeBuddyTokens,
+  type CodeBuddyTokenBag,
 } from "./codebuddy-auth";
 
+type CodeBuddyTokens = CodeBuddyTokenBag;
 
 /**
  * Detect if a system prompt belongs to a known AI agent/CLI tool.
@@ -50,60 +54,50 @@ function isAgentSystemPrompt(content: string): boolean {
   return AGENT_SYSTEM_PROMPT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
-interface CodeBuddyTokens {
-  api_key?: string;
-  access_token?: string;
-  refresh_token?: string;
-  session_token?: string;
-  csrf_token?: string;
-  cookies?: string;
-  web_cookie?: string;
-}
-
-/** Map cb- prefixed model IDs to the actual CodeBuddy API model names. */
+/**
+ * Map cb- prefixed model IDs → CodeBuddy SaaS upstream ids.
+ * Catalog aligned to CodeBuddy CLI global `/model` list (2026-07) plus Claude
+ * ids still proven on ck_ API keys. Dropped: opus-4.7/4.8, enowx, bare gpt-5.1/5.2.
+ */
 const CB_MODEL_MAP: Record<string, string> = {
-  // Claude
+  // CLI default + scenario
+  "cb-default": "default-model",
+  // Claude (ck_ probe OK; may be hidden in CLI /model UI)
   "cb-opus-4.6": "claude-opus-4.6",
-  "cb-opus-4.7": "claude-opus-4.7",
-  "cb-opus-4.7-1m": "claude-opus-4.7-1m",
-  "cb-opus-4.8": "claude-opus-4.8",
-  "cb-opus-4.8-1m": "claude-opus-4.8-1m",
   "cb-sonnet-4.6": "claude-sonnet-4.6",
   "cb-haiku-4.5": "claude-haiku-4.5",
-  // GPT
-  "cb-gpt-5.1": "gpt-5.1",
-  "cb-gpt-5.1-codex": "gpt-5.1-codex",
-  "cb-gpt-5.1-codex-max": "gpt-5.1-codex-max",
-  "cb-gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
-  "cb-gpt-5.2": "gpt-5.2",
-  "cb-gpt-5.2-codex": "gpt-5.2-codex",
-  "cb-gpt-5.3-codex": "gpt-5.3-codex",
-  "cb-gpt-5.4": "gpt-5.4",
+  // GPT (CLI global list — codex family + 5.4/5.5)
   "cb-gpt-5.5": "gpt-5.5",
-  "cb-gpt-5.5-xhigh": "gpt-5.5-xhigh",
-  // Gemini
-  "cb-gemini-2.5-flash": "gemini-2.5-flash",
-  "cb-gemini-2.5-pro": "gemini-2.5-pro",
-  "cb-gemini-3.0-flash": "gemini-3.0-flash",
-  "cb-gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+  "cb-gpt-5.4": "gpt-5.4",
+  "cb-gpt-5.3-codex": "gpt-5.3-codex",
+  "cb-gpt-5.1-codex": "gpt-5.1-codex",
+  "cb-gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
+  // Gemini (CLI global list)
   "cb-gemini-3.1-pro": "gemini-3.1-pro",
+  "cb-gemini-3.0-flash": "gemini-3.0-flash",
   "cb-gemini-3.5-flash": "gemini-3.5-flash",
-  // DeepSeek
+  "cb-gemini-2.5-pro": "gemini-2.5-pro",
+  "cb-gemini-2.5-flash": "gemini-2.5-flash",
+  "cb-gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+  // DeepSeek / GLM / Kimi
   "cb-deepseek-v3-2": "deepseek-v3-2-volc",
-  // Kimi
+  "cb-glm-5.0": "glm-5.0",
   "cb-kimi-k2.5": "kimi-k2.5",
-  // Other
-  "cb-enowx": "enowx-default",
 };
 
+/** Rough creditRate from CLI multiplier (xN) → credits per token estimate. */
+function rateFromCliMult(mult: number): number {
+  return (mult * 0.01) / 1000;
+}
+
 /**
- * CodeBuddy Provider - MAX tier
- * Supports Claude Opus, GPT-5.x, Gemini, DeepSeek, Kimi models
+ * CodeBuddy Provider (global SaaS — www.codebuddy.ai)
+ * Catalog mirrors CLI `/model` + proven Claude ck_ models.
  */
 export class CodeBuddyProvider extends BaseProvider {
   name = "codebuddy";
 
-  /** Cache for resolved tool schemas — Claude Code sends the same tools every request */
+  /** Cache for resolved tool schemas — the assistant sends the same tools every request */
   private schemaCache = new Map<string, any>();
   private static readonly SCHEMA_CACHE_MAX = 200;
 
@@ -123,52 +117,31 @@ export class CodeBuddyProvider extends BaseProvider {
   private baseUrl = "https://www.codebuddy.ai";
 
   supportedModels: ModelInfo[] = [
-    // Credit rates derived from confirmed data point:
-    //   claude-opus-4.6 = 6.97 credits / 260,613 tokens = 0.02674 credits/1K tokens
-    // Other models estimated from upstream API pricing ratios relative to opus-4.6.
-    // Upstream prices ($/M tokens): opus=$5/$25, gpt-5.5=$5/$30, gpt-5.1=$1.25/$10,
-    //   gemini-2.5-pro=$1.25/$10, gemini-flash=$0.30/$2.50, deepseek=$0.14/$0.28
-    // 1 CodeBuddy credit ≈ $0.01 passthrough.
-
-    // All models exposed with cb- prefix only
-    { id: "cb-opus-4.8", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
-    { id: "cb-opus-4.8-1m", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
-    { id: "cb-opus-4.7", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
-    { id: "cb-opus-4.7-1m", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
+    // Advertise only models proven OK on ck_ API key path (live probe 2026-07).
+    // GPT-*/deepseek-v3-2 stay in CB_MODEL_MAP for resolve but are not listed until
+    // session/JWT wire parity lands (CLI shows them; ck_ returns 11133/11102).
+    // creditRate ≈ CLI multiplier × 0.01 / 1000 tokens (rough).
+    { id: "cb-default", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: rateFromCliMult(2.0), creditSource: "estimated" },
+    { id: "cb-gemini-3.1-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: rateFromCliMult(1.32), creditSource: "estimated" },
+    { id: "cb-gemini-3.0-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: rateFromCliMult(0.33), creditSource: "estimated" },
+    { id: "cb-gemini-3.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: rateFromCliMult(0.99), creditSource: "estimated" },
+    { id: "cb-gemini-2.5-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: rateFromCliMult(0.90), creditSource: "estimated" },
+    { id: "cb-gemini-2.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: rateFromCliMult(0.22), creditSource: "estimated" },
+    { id: "cb-gemini-3.1-flash-lite", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: rateFromCliMult(0.17), creditSource: "estimated" },
+    { id: "cb-glm-5.0", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: rateFromCliMult(0.80), creditSource: "estimated" },
+    { id: "cb-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: rateFromCliMult(0.45), creditSource: "estimated" },
+    // Claude (ck_ probe OK; may be hidden in CLI /model UI)
     { id: "cb-opus-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
     { id: "cb-sonnet-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
     { id: "cb-haiku-4.5", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 200000, max_output: 8192, thinking: true, vision: true, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex-max", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.025 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex-mini", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.003 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.016 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.2-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.016 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.3-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.013 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.4", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.018 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.035 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.5-xhigh", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.045 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-2.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.003 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-2.5-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.0-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.1-flash-lite", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.1-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
-    { id: "cb-deepseek-v3-2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
-    { id: "cb-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
-    { id: "cb-enowx", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.01 / 1000, creditSource: "estimated" },
   ];
 
   private getTokens(account: Account): CodeBuddyTokens | null {
-    if (!account.tokens) return null;
-    try {
-      const t = typeof account.tokens === "string"
-        ? JSON.parse(account.tokens)
-        : account.tokens;
-      return t as CodeBuddyTokens;
-    } catch {
-      return null;
-    }
+    return parseCodeBuddyTokens(account.tokens);
+  }
+
+  private getBearer(tokens: CodeBuddyTokens | null | undefined): string | undefined {
+    return codeBuddyBearerFromTokens(tokens);
   }
 
   private normalizeTools(tools: any[] | undefined): any[] {
@@ -504,7 +477,7 @@ export class CodeBuddyProvider extends BaseProvider {
    * Returns: "ok" | "quota_exhausted" | "expired"
    */
   private async validateApiKey(tokens: CodeBuddyTokens): Promise<"ok" | "quota_exhausted" | "expired"> {
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = this.getBearer(tokens);
     if (!apiKey) return "expired";
 
     // Primary: use billing API to validate — doesn't consume credits and gives definitive auth status
@@ -536,7 +509,9 @@ export class CodeBuddyProvider extends BaseProvider {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         },
         body: JSON.stringify({
-          model: "gpt-5.5",
+          // Use a model that is always available on the CLI catalog (proven on ck_).
+          // gpt-5.5 returns 11133 on ck_ API keys and would false-negative health.
+          model: "gemini-2.5-flash",
           messages: [{ role: "user", content: "hi" }],
           max_tokens: 100,
           stream: true,
@@ -558,7 +533,8 @@ export class CodeBuddyProvider extends BaseProvider {
   }
 
   private hasUsableAuth(tokens: CodeBuddyTokens): boolean {
-    return Boolean(tokens.api_key || tokens.access_token || tokens.session_token || tokens.web_cookie || tokens.cookies);
+    // Delegate bearer to single source; web_cookie/cookies still validate independently.
+    return Boolean(this.getBearer(tokens) || tokens.web_cookie || tokens.cookies);
   }
 
   private buildAuthHeaders(tokens: CodeBuddyTokens, json = true): Record<string, string> {
@@ -569,7 +545,7 @@ export class CodeBuddyProvider extends BaseProvider {
     };
     if (json) headers["Content-Type"] = "application/json";
 
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = this.getBearer(tokens);
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
       applyCodeBuddyUserIdHeader(headers, apiKey);
@@ -594,7 +570,7 @@ export class CodeBuddyProvider extends BaseProvider {
 
     // Use /v2/billing/meter/get-user-resource which works with API key (Bearer token).
     // The old /billing/meter/get-user-resource requires web session cookies that expire.
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = this.getBearer(tokens);
     const headers: Record<string, string> = {
       "Accept": "application/json, text/plain, */*",
       "Content-Type": "application/json",
@@ -636,7 +612,7 @@ export class CodeBuddyProvider extends BaseProvider {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
 
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = this.getBearer(tokens);
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
       headers["X-Api-Key"] = apiKey;

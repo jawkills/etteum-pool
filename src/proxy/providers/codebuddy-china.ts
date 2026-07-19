@@ -12,14 +12,13 @@ import { config } from "../../config";
 import {
   applyCodeBuddyUserIdHeader,
   classifyCodeBuddyHttpFailure,
+  codeBuddyBearerFromTokens,
   parseCodeBuddyResourceQuota,
+  parseCodeBuddyTokens,
+  type CodeBuddyTokenBag,
 } from "./codebuddy-auth";
 
-interface CodeBuddyChinaTokens {
-  api_key?: string;
-  access_token?: string;
-  session_token?: string;
-}
+type CodeBuddyChinaTokens = CodeBuddyTokenBag;
 
 /** Map cbc- prefixed model IDs to actual CodeBuddy China API model names. */
 const CBC_MODEL_MAP: Record<string, string> = {
@@ -97,19 +96,11 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   private static readonly SCHEMA_CACHE_MAX = 200;
 
   private getTokens(account: Account): CodeBuddyChinaTokens | null {
-    if (!account.tokens) return null;
-    try {
-      const t = typeof account.tokens === "string"
-        ? JSON.parse(account.tokens)
-        : account.tokens;
-      return t as CodeBuddyChinaTokens;
-    } catch {
-      return null;
-    }
+    return parseCodeBuddyTokens(account.tokens);
   }
 
-  private getApiKey(tokens: CodeBuddyChinaTokens): string | null {
-    return tokens.api_key || tokens.access_token || tokens.session_token || null;
+  private getApiKey(tokens: CodeBuddyChinaTokens | null | undefined): string | null {
+    return codeBuddyBearerFromTokens(tokens) || null;
   }
 
   private buildHeaders(apiKey: string, stream = false): Record<string, string> {
