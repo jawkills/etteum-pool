@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { config } from "../config";
+import { getActiveApiKey } from "../api/keys";
 import { broadcast } from "../ws/index";
 import { pool } from "../proxy/pool";
 import { addAuthLog } from "./logs";
@@ -109,6 +110,8 @@ export function parseGrokFarmLogLine(line: string): GrokFarmLogParse {
 class GrokFarmQueue {
   private status: GrokFarmStatus = createIdleGrokFarmStatus();
   private child: ChildProcess | null = null;
+  /** Sync latch so concurrent start() cannot both pass the running check during await getActiveApiKey. */
+  private startLock = false;
   /** attempt# → last known email for grouping Bot Logs */
   private attemptEmail = new Map<number, string>();
 
@@ -133,161 +136,194 @@ class GrokFarmQueue {
       provider: "grok-cli",
       ...entry,
     });
+    // Never map auth-log serial id → accountId (Bot Logs would show "Account #N").
     broadcast({
       type: entry.type,
       data: {
-        ...log,
+        logId: log.id,
+        timestamp: log.timestamp,
+        type: entry.type,
         provider: "grok-cli",
         email: entry.email || log.email,
         step: entry.step || log.step,
         message: entry.message || log.message,
         error: entry.error || log.error,
+        data: entry.data,
       },
     });
   }
 
-  start(opts: {
+  async start(opts: {
     count: number;
     concurrent: number;
-  }): { ok: true; status: GrokFarmStatus } | { ok: false; error: string } {
-    if (this.status.running || this.child) {
+  }): Promise<{ ok: true; status: GrokFarmStatus } | { ok: false; error: string }> {
+    // Sync gate first — must not await between check and latch.
+    if (this.startLock || this.status.running || this.child) {
       return { ok: false, error: "Grok farm already running" };
     }
+    this.startLock = true;
 
-    const count = Math.max(1, Math.min(1000, Math.floor(opts.count)));
-    const concurrent = Math.max(1, Math.min(20, Math.floor(opts.concurrent)));
-    const farmDir = config.grokFarmDir;
-    const script = path.join(farmDir, "http_farm.py");
+    try {
+      const count = Math.max(1, Math.min(1000, Math.floor(opts.count)));
+      const concurrent = Math.max(1, Math.min(20, Math.floor(opts.concurrent)));
+      const farmDir = config.grokFarmDir;
+      const script = path.join(farmDir, "http_farm.py");
 
-    if (!existsSync(script)) {
+      if (!existsSync(script)) {
+        this.startLock = false;
+        return {
+          ok: false,
+          error: `http_farm.py not found at ${script}. Expected in-tree scripts/grok-farm (or set GROK_FARM_DIR).`,
+        };
+      }
+
+      // Prefer DB/dashboard active key over stale env-only config.apiKey.
+      const apiKey = (await getActiveApiKey()) || config.apiKey;
+      if (!apiKey) {
+        this.startLock = false;
+        return { ok: false, error: "API_KEY not set (needed for farm push to etteum)" };
+      }
+
+      const etteumUrl = process.env.ETTEUM_PUBLIC_URL || `http://127.0.0.1:${config.port}`;
+
+      // Prefer in-tree venv python if installed (Windows / Unix)
+      const venvWin = path.join(farmDir, ".venv", "Scripts", "python.exe");
+      const venvUnix = path.join(farmDir, ".venv", "bin", "python");
+      let pyBin = config.grokFarmPython;
+      let pyArgs = [...config.grokFarmPythonArgs];
+      if (existsSync(venvWin)) {
+        pyBin = venvWin;
+        pyArgs = [];
+      } else if (existsSync(venvUnix)) {
+        pyBin = venvUnix;
+        pyArgs = [];
+      }
+
+      this.attemptEmail.clear();
+      this.setStatus({
+        ...createIdleGrokFarmStatus(),
+        running: true,
+        target: count,
+        concurrent,
+        startedAt: new Date().toISOString(),
+        lastMessage: "starting http_farm.py",
+      });
+
+      const spawnArgs = [
+        ...pyArgs,
+        script,
+        "-n",
+        String(count),
+        "-c",
+        String(concurrent),
+        "-y",
+        "--push",
+      ];
+
+      const child = spawn(pyBin, spawnArgs, {
+        cwd: farmDir,
+        env: {
+          ...process.env,
+          ETTEUM_URL: etteumUrl,
+          ETTEUM_API_KEY: apiKey,
+          API_KEY: apiKey,
+          GROK_PUSH_ETTEUM: "true",
+          GROK_PUSH_MODE: "per_success",
+          // Force line logs (not HUD) so etteum can parse STEP/OK/FAIL
+          GROK_UI: "log",
+          GROK_VERBOSE: "true",
+          PYTHONUNBUFFERED: "1",
+        },
+        windowsHide: true,
+      });
+
+      this.child = child;
+      this.setStatus({ pid: child.pid ?? null });
+
+      this.emitLog({
+        type: "grok_farm_started",
+        step: "start",
+        message: `Grok farm started: target=${count} concurrent=${concurrent}`,
+        data: { target: count, concurrent },
+      });
+
+      let buf = "";
+      const onData = (chunk: Buffer) => {
+        buf += chunk.toString("utf8");
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop() || "";
+        for (const line of lines) this.handleLine(line);
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+
+      child.on("error", (err) => {
+        this.child = null;
+        this.startLock = false;
+        this.setStatus({
+          running: false,
+          finishedAt: new Date().toISOString(),
+          error: err.message,
+          lastMessage: `spawn error: ${err.message}`,
+        });
+        this.emitLog({
+          type: "grok_farm_failed",
+          step: "spawn",
+          message: `spawn error: ${err.message}`,
+          error: err.message,
+        });
+      });
+
+      child.on("close", (code) => {
+        this.child = null;
+        this.startLock = false;
+        pool.invalidate("grok-cli" as any);
+        const ok = code === 0;
+        this.setStatus({
+          running: false,
+          finishedAt: new Date().toISOString(),
+          lastMessage: ok ? "farm finished" : `farm exit ${code}`,
+          error: !ok ? `exit ${code}` : this.status.error,
+        });
+        this.emitLog({
+          type: ok ? "grok_farm_complete" : "grok_farm_failed",
+          step: "complete",
+          message: ok
+            ? `Farm complete: ${this.status.success} ok, ${this.status.failed} fail / ${this.status.target}`
+            : `Farm exited ${code}: ${this.status.success} ok, ${this.status.failed} fail`,
+          error: !ok ? `exit ${code}` : undefined,
+          data: this.getStatus(),
+        });
+        // Only broadcast complete on success — Bot Logs used to rank complete as green
+        // even after grok_farm_failed (false "success" badge next to "exit 2").
+        if (ok) {
+          broadcast({ type: "grok_farm_complete", data: this.getStatus() });
+          if (this.status.success > 0) {
+            broadcast({
+              type: "accounts_bulk_created",
+              data: { count: this.status.success, provider: "grok-cli" },
+            });
+          }
+        } else {
+          broadcast({ type: "grok_farm_failed", data: this.getStatus() });
+        }
+      });
+
+      broadcast({ type: "grok_farm_started", data: this.getStatus() });
+      return { ok: true, status: this.getStatus() };
+    } catch (err) {
+      this.startLock = false;
+      this.child = null;
+      this.setStatus({
+        running: false,
+        finishedAt: new Date().toISOString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
       return {
         ok: false,
-        error: `http_farm.py not found at ${script}. Expected in-tree scripts/grok-farm (or set GROK_FARM_DIR).`,
+        error: err instanceof Error ? err.message : String(err),
       };
     }
-
-    const apiKey = config.apiKey;
-    if (!apiKey) {
-      return { ok: false, error: "API_KEY not set (needed for farm push to etteum)" };
-    }
-
-    const etteumUrl = process.env.ETTEUM_PUBLIC_URL || `http://127.0.0.1:${config.port}`;
-
-    // Prefer in-tree venv python if installed (Windows / Unix)
-    const venvWin = path.join(farmDir, ".venv", "Scripts", "python.exe");
-    const venvUnix = path.join(farmDir, ".venv", "bin", "python");
-    let pyBin = config.grokFarmPython;
-    let pyArgs = [...config.grokFarmPythonArgs];
-    if (existsSync(venvWin)) {
-      pyBin = venvWin;
-      pyArgs = [];
-    } else if (existsSync(venvUnix)) {
-      pyBin = venvUnix;
-      pyArgs = [];
-    }
-
-    this.attemptEmail.clear();
-    this.setStatus({
-      ...createIdleGrokFarmStatus(),
-      running: true,
-      target: count,
-      concurrent,
-      startedAt: new Date().toISOString(),
-      lastMessage: "starting http_farm.py",
-    });
-
-    const spawnArgs = [
-      ...pyArgs,
-      script,
-      "-n",
-      String(count),
-      "-c",
-      String(concurrent),
-      "-y",
-      "--push",
-    ];
-
-    const child = spawn(pyBin, spawnArgs, {
-      cwd: farmDir,
-      env: {
-        ...process.env,
-        ETTEUM_URL: etteumUrl,
-        ETTEUM_API_KEY: apiKey,
-        API_KEY: apiKey,
-        GROK_PUSH_ETTEUM: "true",
-        GROK_PUSH_MODE: "per_success",
-        // Force line logs (not HUD) so etteum can parse STEP/OK/FAIL
-        GROK_UI: "log",
-        GROK_VERBOSE: "true",
-        PYTHONUNBUFFERED: "1",
-      },
-      windowsHide: true,
-    });
-
-    this.child = child;
-    this.setStatus({ pid: child.pid ?? null });
-
-    this.emitLog({
-      type: "grok_farm_started",
-      step: "start",
-      message: `Grok farm started: target=${count} concurrent=${concurrent}`,
-      data: { target: count, concurrent },
-    });
-
-    let buf = "";
-    const onData = (chunk: Buffer) => {
-      buf += chunk.toString("utf8");
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop() || "";
-      for (const line of lines) this.handleLine(line);
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-
-    child.on("error", (err) => {
-      this.child = null;
-      this.setStatus({
-        running: false,
-        finishedAt: new Date().toISOString(),
-        error: err.message,
-        lastMessage: `spawn error: ${err.message}`,
-      });
-      this.emitLog({
-        type: "grok_farm_failed",
-        step: "spawn",
-        message: `spawn error: ${err.message}`,
-        error: err.message,
-      });
-    });
-
-    child.on("close", (code) => {
-      this.child = null;
-      pool.invalidate("grok-cli" as any);
-      const ok = code === 0;
-      this.setStatus({
-        running: false,
-        finishedAt: new Date().toISOString(),
-        lastMessage: ok ? "farm finished" : `farm exit ${code}`,
-        error: !ok ? `exit ${code}` : this.status.error,
-      });
-      this.emitLog({
-        type: ok ? "grok_farm_complete" : "grok_farm_failed",
-        step: "complete",
-        message: ok
-          ? `Farm complete: ${this.status.success} ok, ${this.status.failed} fail / ${this.status.target}`
-          : `Farm exited ${code}: ${this.status.success} ok, ${this.status.failed} fail`,
-        error: !ok ? `exit ${code}` : undefined,
-        data: this.getStatus(),
-      });
-      broadcast({ type: "grok_farm_complete", data: this.getStatus() });
-      broadcast({
-        type: "accounts_bulk_created",
-        data: { count: this.status.success, provider: "grok-cli" },
-      });
-    });
-
-    broadcast({ type: "grok_farm_started", data: this.getStatus() });
-    return { ok: true, status: this.getStatus() };
   }
 
   private handleLine(line: string) {

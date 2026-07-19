@@ -135,8 +135,17 @@ export const config = {
   grokFarmDir: process.env.GROK_FARM_DIR || path.join(projectRoot, "scripts/grok-farm"),
   grokFarmPython: process.env.GROK_FARM_PYTHON || "py",
   grokFarmPythonArgs: (process.env.GROK_FARM_PYTHON_ARGS || "-3").split(/\s+/).filter(Boolean),
-  // Providers: kiro, kiro-pro, codebuddy, canva, codex, qoder, gitlab-duo
-  providers: ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"] as const,
+  // Providers listed for Settings / auto-warmup toggles (Accounts UI has its own full list).
+  providers: [
+    "kiro",
+    "kiro-pro",
+    "codebuddy",
+    "canva",
+    "codex",
+    "qoder",
+    "gitlab-duo",
+    "grok-cli",
+  ] as const,
 } as const;
 
 export type Config = typeof config;

@@ -156,8 +156,16 @@ export default function Requests() {
         <select value={provider} onChange={(e) => setProvider(e.target.value)} className="h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
           <option value="all">All Providers</option>
           <option value="kiro">Kiro</option>
+          <option value="kiro-pro">Kiro Pro</option>
           <option value="codebuddy">CodeBuddy</option>
+          <option value="codebuddy-china">CodeBuddy CN</option>
           <option value="canva">Canva</option>
+          <option value="codex">Codex</option>
+          <option value="qoder">Qoder</option>
+          <option value="gitlab-duo">GitLab Duo</option>
+          <option value="youmind">YouMind</option>
+          <option value="grok-cli">Grok CLI</option>
+          <option value="byok">BYOK</option>
         </select>
       </div>
 

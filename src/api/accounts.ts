@@ -13,6 +13,9 @@ import { activateQoderPat } from "../proxy/providers/qoder";
 import { activateYouMindKey } from "../proxy/providers/youmind";
 import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../proxy/providers/grok-cli";
 import { grokFarmQueue } from "../auth/grok-farm-queue";
+import { grokReauthQueue } from "../auth/grok-reauth-queue";
+import { isPermanentRevocation, isPlaceholderPassword } from "../proxy/account-health";
+import { proveAccountSession, applySessionProveResult } from "../proxy/session-prove";
 
 export const accountsRouter = new Hono();
 
@@ -151,12 +154,24 @@ accountsRouter.get("/warmup-queue", (c) => {
 accountsRouter.get("/", async (c) => {
   const allAccounts = await db.select().from(accounts);
 
-  // Don't expose passwords in response
-  const sanitized = allAccounts.map((acc) => ({
-    ...acc,
-    password: "***",
-    tokens: acc.tokens ? "[set]" : null,
-  }));
+  // Don't expose passwords in response. For grok-cli, surface hasReauthPassword
+  // so UI can enable Reauth without revealing the secret.
+  const sanitized = allAccounts.map((acc) => {
+    let hasReauthPassword = false;
+    if (acc.provider === "grok-cli" && acc.password) {
+      try {
+        hasReauthPassword = !isPlaceholderPassword(decrypt(acc.password));
+      } catch {
+        hasReauthPassword = false;
+      }
+    }
+    return {
+      ...acc,
+      password: "***",
+      tokens: acc.tokens ? "[set]" : null,
+      hasReauthPassword,
+    };
+  });
 
   return c.json({ data: sanitized, total: sanitized.length });
 });
@@ -1631,22 +1646,38 @@ accountsRouter.post("/grok-cli/import", async (c) => {
       const emailLower = norm.email.toLowerCase();
       const existing = existingRows.find((r) => r.email.toLowerCase() === emailLower);
 
+      // Optional password from farm push / CPA — enables later reauth without re-farm.
+      const rawPassword =
+        item && typeof item === "object"
+          ? String((item as any).password || (item as any).xai_password || "").trim()
+          : "";
+      const hasRealPassword = !isPlaceholderPassword(rawPassword);
+      const passwordEnc = hasRealPassword
+        ? encrypt(rawPassword)
+        : encrypt("grok-cli-token-auth");
+
       if (existing) {
+        const updatePayload: Record<string, unknown> = {
+          tokens: tokensJson as unknown,
+          status: "active",
+          enabled: true,
+          quotaLimit: GROK_CLI_TOKEN_LIMIT,
+          quotaRemaining: existing.quotaRemaining ?? GROK_CLI_TOKEN_LIMIT,
+          errorMessage: null,
+          updatedAt: new Date(),
+        };
+        // Only overwrite password when a real one was provided (keep prior reauth secret).
+        if (hasRealPassword) {
+          updatePayload.password = passwordEnc;
+        }
         await db
           .update(accounts)
-          .set({
-            tokens: tokensJson as unknown,
-            status: "active",
-            enabled: true,
-            quotaLimit: GROK_CLI_TOKEN_LIMIT,
-            quotaRemaining: existing.quotaRemaining ?? GROK_CLI_TOKEN_LIMIT,
-            errorMessage: null,
-            updatedAt: new Date(),
-          })
+          .set(updatePayload)
           .where(eq(accounts.id, existing.id));
         existing.tokens = tokensJson as unknown;
         existing.status = "active";
         existing.enabled = true;
+        if (updatePayload.password) existing.password = passwordEnc;
         imported++;
         results.push({ email: norm.email, success: true, id: existing.id, updated: true });
       } else {
@@ -1655,7 +1686,7 @@ accountsRouter.post("/grok-cli/import", async (c) => {
           .values({
             provider: "grok-cli",
             email: norm.email,
-            password: encrypt("grok-cli-token-auth"),
+            password: passwordEnc,
             tokens: tokensJson as unknown,
             status: "active",
             enabled: true,
@@ -1699,7 +1730,7 @@ accountsRouter.post("/grok-cli/farm", async (c) => {
     return c.json({ error: "count >= 1 required" }, 400);
   }
   const concurrent = Number(body.concurrent) > 0 ? Number(body.concurrent) : 1;
-  const result = grokFarmQueue.start({ count, concurrent });
+  const result = await grokFarmQueue.start({ count, concurrent });
   if (!result.ok) return c.json({ error: result.error }, 409);
   return c.json({ data: result.status });
 });
@@ -1714,6 +1745,39 @@ accountsRouter.post("/grok-cli/farm/stop", (c) => {
   const result = grokFarmQueue.stop();
   if (!result.ok) return c.json({ error: result.error }, 409);
   return c.json({ data: grokFarmQueue.getStatus() });
+});
+
+/** POST /api/accounts/grok-cli/reauth — revive dead accounts via email+password OIDC */
+accountsRouter.post("/grok-cli/reauth", async (c) => {
+  const body = await c.req
+    .json<{
+      ids?: number[];
+      onlyDead?: boolean;
+      concurrent?: number;
+      defaultPassword?: string;
+    }>()
+    .catch(() => ({} as any));
+
+  const result = await grokReauthQueue.start({
+    ids: body.ids,
+    onlyDead: body.onlyDead,
+    concurrent: body.concurrent,
+    defaultPassword: body.defaultPassword,
+  });
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  return c.json({ data: result.status, skipped: result.skipped });
+});
+
+/** GET /api/accounts/grok-cli/reauth */
+accountsRouter.get("/grok-cli/reauth", (c) => {
+  return c.json({ data: grokReauthQueue.getStatus() });
+});
+
+/** POST /api/accounts/grok-cli/reauth/stop */
+accountsRouter.post("/grok-cli/reauth/stop", (c) => {
+  const result = grokReauthQueue.stop();
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  return c.json({ data: grokReauthQueue.getStatus() });
 });
 
 /**
@@ -1951,6 +2015,131 @@ accountsRouter.post("/:id/refresh-quota", async (c) => {
   }
 
   return c.json(result);
+});
+
+/**
+ * POST /api/accounts/refresh-token-bulk
+ * Body: { ids?: number[], provider?: string, limit?: number, concurrency?: number }
+ * Server-side concurrent force refresh (replaces browser sequential loops).
+ * Registered before /:id/* so it is never captured as an id.
+ */
+accountsRouter.post("/refresh-token-bulk", async (c) => {
+  const body = await c.req
+    .json<{
+      ids?: number[];
+      provider?: string;
+      limit?: number;
+      concurrency?: number;
+    }>()
+    .catch(() => ({} as any));
+
+  const limit = Math.min(100, Math.max(1, Number(body.limit) || 50));
+  const concurrency = Math.min(10, Math.max(1, Number(body.concurrency) || 5));
+
+  let rows: typeof accounts.$inferSelect[] = [];
+  if (Array.isArray(body.ids) && body.ids.length > 0) {
+    const ids = body.ids.map(Number).filter((n) => Number.isFinite(n));
+    if (ids.length === 0) return c.json({ error: "ids required" }, 400);
+    rows = await db.select().from(accounts).where(inArray(accounts.id, ids.slice(0, limit)));
+  } else if (body.provider) {
+    const all = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.provider, String(body.provider)));
+    // Eligible: enabled, not permanent-revoked, in a refreshable status.
+    rows = all
+      .filter(
+        (a) =>
+          a.enabled === true &&
+          !isPermanentRevocation(a.errorMessage) &&
+          (a.status === "active" || a.status === "error" || a.status === "pending")
+      )
+      .slice(0, limit);
+  } else {
+    return c.json({ error: "ids or provider required" }, 400);
+  }
+
+  type One = {
+    id: number;
+    email: string;
+    success: boolean;
+    dead: boolean;
+    kind: string;
+    status: string;
+    error?: string;
+  };
+  const results: One[] = [];
+  let i = 0;
+
+  async function worker() {
+    while (i < rows.length) {
+      const idx = i++;
+      const account = rows[idx]!;
+      const proved = await proveAccountSession(account, "force-refresh");
+      const applied = await applySessionProveResult(account, proved);
+      results.push({
+        id: account.id,
+        email: account.email,
+        success: proved.ok,
+        dead: proved.kind === "session_revoked",
+        kind: proved.kind,
+        status: applied.status,
+        error: proved.error,
+      });
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) || 1 }, () => worker()));
+
+  const ok = results.filter((r) => r.success).length;
+  const dead = results.filter((r) => r.dead).length;
+  const fail = results.length - ok - dead;
+
+  return c.json({
+    total: results.length,
+    ok,
+    dead,
+    fail,
+    results,
+  });
+});
+
+/**
+ * POST /api/accounts/:id/refresh-token - Force OAuth/session prove (not quota).
+ * Shared proveSession path; permanent revocation → markError (provider formats its own errors).
+ */
+accountsRouter.post("/:id/refresh-token", async (c) => {
+  const id = Number(c.req.param("id"));
+  const [account] = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.id, id));
+
+  if (!account) {
+    return c.json({ error: "Account not found" }, 404);
+  }
+
+  const proved = await proveAccountSession(account, "force-refresh");
+  const applied = await applySessionProveResult(account, proved);
+
+  if (proved.ok) {
+    return c.json({
+      success: true,
+      dead: false,
+      kind: proved.kind,
+      status: applied.status,
+      tokensUpdated: proved.refreshed || proved.tokens !== undefined,
+      message: proved.message,
+    });
+  }
+
+  return c.json({
+    success: false,
+    dead: proved.kind === "session_revoked",
+    kind: proved.kind,
+    status: applied.status,
+    error: proved.error || "refresh failed",
+  });
 });
 
 /**

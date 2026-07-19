@@ -62,7 +62,9 @@ def _env_bool(key: str, default: bool = True) -> bool:
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(ROOT / ".env", override=True)
+    # Do not override parent-injected env (dashboard sets ETTEUM_API_KEY / ETTEUM_URL).
+    # Stale keys in scripts/grok-farm/.env must not clobber a live API key.
+    load_dotenv(ROOT / ".env", override=False)
 except ImportError:
     env_f = ROOT / ".env"
     if env_f.is_file():
@@ -1234,6 +1236,79 @@ def run_signup(attempt_num: int, max_accounts: int) -> dict:
     return result
 
 
+def login_existing_with_retries(
+    attempt_num: int,
+    client: "XAIHttp",
+    email: str,
+    password: str,
+    tries: int = 3,
+    proxy: str | None = None,
+) -> str:
+    """CreateSession for an existing xAI account (reauth path — no tempmail)."""
+    for retry in range(1, tries + 1):
+        emit_progress(attempt_num, "turnstile", f"reauth {retry}/{tries}", email)
+        t = get_turnstile(f"{BASE}/sign-in", proxy=proxy)
+        emit_progress(attempt_num, "rpc_login", f"reauth {retry}/{tries}", email)
+        r, p = client.rpc(
+            "CreateSession",
+            msg_create_session_email_password(email, password, turnstile=t),
+            referer=f"{BASE}/sign-in",
+        )
+        sc = extract_session_cookie(p)
+        if sc:
+            return sc
+        vlog(f"[RPC] CreateSession reauth fail retry={retry}/{tries}")
+        time.sleep(1.5 * retry)
+    raise RuntimeError(f"no session_cookie for reauth {email}")
+
+
+def run_reauth(attempt_num: int, max_accounts: int, email: str, password: str) -> dict:
+    """Login existing email+password → OIDC tokens (no mailbox / signup)."""
+    email = (email or "").strip()
+    password = password or ""
+    if not email or not password:
+        raise RuntimeError("email and password required for reauth")
+
+    emit_progress(attempt_num, "start", f"reauth {attempt_num}/{max_accounts}", email)
+
+    emit_progress(attempt_num, "clearance", "getting clearance...", email)
+    proxy = pick_proxy_sync()
+    clr = get_clearance(f"{BASE}/sign-in", proxy=proxy)
+    emit_progress(attempt_num, "clearance", f"ok {clr.get('elapsed_time')}s", email)
+
+    client = XAIHttp(proxy)
+    client.seed_clearance(clr)
+    r = client.get(f"{BASE}/sign-in")
+    blocked = "Attention Required" in (r.text or "")
+    if r.status_code != 200 or blocked:
+        vlog("[HTTP] CF blocked on sign-in, retry with new proxy...")
+        proxy = pick_proxy_sync(exclude={proxy})
+        clr = get_clearance(f"{BASE}/sign-in", proxy=proxy)
+        client = XAIHttp(proxy)
+        client.seed_clearance(clr)
+        r = client.get(f"{BASE}/sign-in")
+        blocked = "Attention Required" in (r.text or "")
+        if r.status_code != 200 or blocked:
+            raise RuntimeError("CF still blocking after proxy rotate")
+
+    session_cookie = login_existing_with_retries(
+        attempt_num, client, email, password, tries=3, proxy=proxy
+    )
+    client.set_sso(session_cookie)
+
+    emit_progress(attempt_num, "oauth_authorize", "authorize...", email)
+    tokens = obtain_oidc_tokens(client, email)
+    emit_progress(attempt_num, "oauth_token", "tokens ok", email)
+
+    return {
+        "email": email,
+        "password": password,
+        "sso": session_cookie,
+        "proxy": proxy,
+        "tokens": tokens,
+    }
+
+
 # ── Batch management ─────────────────────────────────────────────────────────
 BATCH_ID = ""
 BATCH_DIR: Path = RESULTS_ROOT
@@ -1304,10 +1379,20 @@ async def _worker(
     push_failures: list,
     counter_lock: asyncio.Lock,
     push_on: bool,
+    reauth_job: dict | None = None,
 ) -> None:
     async with semaphore:
         try:
-            result = await asyncio.to_thread(run_signup, num, target)
+            if reauth_job:
+                result = await asyncio.to_thread(
+                    run_reauth,
+                    num,
+                    target,
+                    str(reauth_job.get("email") or ""),
+                    str(reauth_job.get("password") or ""),
+                )
+            else:
+                result = await asyncio.to_thread(run_signup, num, target)
             emit_success(num, result["email"], "ok")
             async with counter_lock: accounts.append(result)
             await asyncio.to_thread(save_result, result)
@@ -1339,25 +1424,57 @@ async def main():
     arg_count: int | None = None
     arg_conc: int | None = None
     skip_prompt = False
+    reauth_file: str | None = None
     i = 0
     while i < len(args):
         a = args[i]
         if a in ("-n", "--count", "--max") and i + 1 < len(args): arg_count = int(args[i + 1]); i += 2; continue
         if a in ("-c", "--concurrent") and i + 1 < len(args): arg_conc = int(args[i + 1]); i += 2; continue
         if a in ("-y", "--yes", "--non-interactive"): skip_prompt = True; i += 1; continue
+        if a == "--reauth-file" and i + 1 < len(args):
+            reauth_file = args[i + 1]
+            i += 2
+            continue
         if a in ("-h", "--help"):
             print(
                 "Usage: http_farm.py [-n COUNT] [-c CONCURRENT] [-y] [--no-push|--push]\n"
-                "  -n/--count       accounts this batch\n"
+                "       http_farm.py --reauth-file PATH [-c CONCURRENT] [-y] [--push]\n"
+                "  -n/--count       accounts this batch (signup mode)\n"
                 "  -c/--concurrent  parallel workers\n"
                 "  -y/--yes         non-interactive\n"
+                "  --reauth-file    JSON list [{email,password}, ...] — login existing, no tempmail\n"
                 "  --no-push        skip etteum import push\n"
                 "  --push           enable etteum import push (default)\n"
             )
             sys.exit(0)
         i += 1
 
-    if not MAIL_KEY:
+    reauth_jobs: list[dict] = []
+    if reauth_file:
+        p = Path(reauth_file)
+        if not p.is_file():
+            print(f"ERROR: --reauth-file not found: {reauth_file}", flush=True)
+            sys.exit(2)
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"ERROR: invalid reauth JSON: {e}", flush=True)
+            sys.exit(2)
+        if not isinstance(raw, list) or not raw:
+            print("ERROR: --reauth-file must be a non-empty JSON array", flush=True)
+            sys.exit(2)
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            em = str(row.get("email") or "").strip()
+            pw = str(row.get("password") or "").strip()
+            if em and pw:
+                reauth_jobs.append({"email": em, "password": pw})
+        if not reauth_jobs:
+            print("ERROR: no valid {email,password} entries in reauth file", flush=True)
+            sys.exit(2)
+        # Reauth does not need tempmail.
+    elif not MAIL_KEY:
         print("ERROR: set GROK_TEMPMAIL_API_KEY in .env", flush=True)
         sys.exit(2)
 
@@ -1373,7 +1490,11 @@ async def main():
     try: _load_used_emails()
     finally: _bi.print = _orig_p
 
-    if skip_prompt:
+    if reauth_jobs:
+        max_accounts = len(reauth_jobs)
+        concurrent = arg_conc if arg_conc is not None else CONCURRENT
+        skip_prompt = True
+    elif skip_prompt:
         max_accounts = arg_count if arg_count is not None else MAX_ACCOUNTS
         concurrent = arg_conc if arg_conc is not None else CONCURRENT
     else:
@@ -1418,8 +1539,19 @@ async def main():
         tasks = []
         for num in range(1, max_accounts + 1):
             if SPAWN_DELAY > 0 and num > 1: await asyncio.sleep(SPAWN_DELAY)
+            job = reauth_jobs[num - 1] if reauth_jobs else None
             t = asyncio.create_task(
-                _worker(num, max_accounts, semaphore, accounts, failures, push_failures, counter_lock, push_on)
+                _worker(
+                    num,
+                    max_accounts,
+                    semaphore,
+                    accounts,
+                    failures,
+                    push_failures,
+                    counter_lock,
+                    push_on,
+                    reauth_job=job,
+                )
             )
             tasks.append(t)
         await asyncio.gather(*tasks)

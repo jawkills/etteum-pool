@@ -3,6 +3,7 @@ import {
   classifyOfflineAccount,
   inspectTokens,
   isDeadErrorMessage,
+  isPlaceholderPassword,
   parseExpiresAtSec,
 } from "./account-health";
 
@@ -27,22 +28,42 @@ describe("parseExpiresAtSec", () => {
   });
 });
 
-describe("isDeadErrorMessage", () => {
-  test("matches permanent death signals", () => {
-    expect(isDeadErrorMessage('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
-    expect(isDeadErrorMessage("Refresh token has been revoked")).toBe(true);
-    expect(isDeadErrorMessage("Grok CLI dead: invalid_grant")).toBe(true);
-    expect(isDeadErrorMessage("Account dead")).toBe(true);
-    expect(isDeadErrorMessage("No access_token for grok-cli account")).toBe(true);
-    expect(isDeadErrorMessage("no access_token")).toBe(true);
-    expect(isDeadErrorMessage("no refresh_token")).toBe(true);
+describe("isPermanentRevocation / isDeadErrorMessage", () => {
+  test("permanent revocation is IdP death only", async () => {
+    const { isPermanentRevocation, isMissingCredentialMessage } = await import("./account-health");
+    expect(isPermanentRevocation('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
+    expect(isPermanentRevocation("Refresh token has been revoked")).toBe(true);
+    expect(isPermanentRevocation("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isPermanentRevocation("Account dead")).toBe(true);
+    expect(isPermanentRevocation("no access_token")).toBe(false);
+    expect(isMissingCredentialMessage("no access_token")).toBe(true);
+    expect(isMissingCredentialMessage("No access_token for grok-cli account")).toBe(true);
+    expect(isMissingCredentialMessage("invalid_grant")).toBe(false);
   });
-  test("does not match transient/generic", () => {
+  test("isDeadErrorMessage unions permanent + missing", () => {
+    expect(isDeadErrorMessage('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
+    expect(isDeadErrorMessage("no access_token")).toBe(true);
     expect(isDeadErrorMessage("Grok CLI auth: unauthorized")).toBe(false);
     expect(isDeadErrorMessage("timeout")).toBe(false);
     expect(isDeadErrorMessage("session_expired")).toBe(false);
-    expect(isDeadErrorMessage("missing_tokens")).toBe(false);
     expect(isDeadErrorMessage(null)).toBe(false);
+  });
+});
+
+describe("isPlaceholderPassword", () => {
+  test("synthetic signup markers are placeholders", () => {
+    expect(isPlaceholderPassword("grok-cli-token-auth")).toBe(true);
+    expect(isPlaceholderPassword("instant-login")).toBe(true);
+    expect(isPlaceholderPassword("pat-login")).toBe(true);
+  });
+  test("empty / null / undefined are placeholders", () => {
+    expect(isPlaceholderPassword("")).toBe(true);
+    expect(isPlaceholderPassword(null)).toBe(true);
+    expect(isPlaceholderPassword(undefined)).toBe(true);
+  });
+  test("operator-provided password is not a placeholder", () => {
+    expect(isPlaceholderPassword("mySecret123")).toBe(false);
+    expect(isPlaceholderPassword("a")).toBe(false);
   });
 });
 

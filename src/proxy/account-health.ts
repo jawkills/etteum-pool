@@ -65,11 +65,11 @@ export function parseExpiresAtSec(raw: unknown): number | null {
 }
 
 /**
- * Permanent session death (revoked refresh, missing access, explicit dead prefix).
- * Keep this aligned with runtime markError decisions — do not treat
- * transient health kinds (session_expired, network) as permanent death.
+ * Permanent IdP revocation — reauth/re-farm required.
+ * Do NOT include bare "no access_token" here (that is missing credentials,
+ * recoverable by re-import / reauth, and must not latch forever via WarmUp skip).
  */
-export function isDeadErrorMessage(error?: string | null): boolean {
+export function isPermanentRevocation(error?: string | null): boolean {
   if (!error) return false;
   const low = error.toLowerCase();
   return (
@@ -77,12 +77,49 @@ export function isDeadErrorMessage(error?: string | null): boolean {
     low.includes("revoked") ||
     low.includes("unknown refresh") ||
     low.includes("grok cli dead") ||
-    low.includes("account dead") ||
-    low.includes("no access_token for grok-cli") ||
-    // bare missing credentials (ops + some providers)
-    low.includes("no access_token") ||
-    low.includes("no refresh_token")
+    low.includes("account dead")
   );
+}
+
+/** Missing credential material (not necessarily IdP-revoked). */
+export function isMissingCredentialMessage(error?: string | null): boolean {
+  if (!error) return false;
+  const low = error.toLowerCase();
+  // Avoid double-counting permanent death strings that mention tokens.
+  if (isPermanentRevocation(error)) return false;
+  return (
+    low.includes("no access_token for grok-cli") ||
+    low.includes("no access_token") ||
+    low.includes("no refresh_token") ||
+    low.includes("missing_tokens") ||
+    low.includes("no valid tokens")
+  );
+}
+
+/**
+ * Permanent unusable session for pool selection / audit "revokedLooking".
+ * = IdP revocation OR missing credentials. Prefer isPermanentRevocation for
+ * WarmUp short-circuit (missing creds should still be diagnosable).
+ */
+export function isDeadErrorMessage(error?: string | null): boolean {
+  return isPermanentRevocation(error) || isMissingCredentialMessage(error);
+}
+
+/**
+ * Passwords that mean "no real password stored" — synthetic provider auth
+ * markers used at signup/import when no operator-provided secret exists.
+ * Reauth requires a real password; these must never satisfy it.
+ */
+export const PLACEHOLDER_PASSWORDS: ReadonlySet<string> = new Set([
+  "grok-cli-token-auth",
+  "instant-login",
+  "pat-login",
+  "",
+]);
+
+/** True when `plain` is a real operator-provided password (not a placeholder). */
+export function isPlaceholderPassword(plain: string | null | undefined): boolean {
+  return !plain || PLACEHOLDER_PASSWORDS.has(plain);
 }
 
 export function inspectTokens(
@@ -189,7 +226,8 @@ export function classifyOfflineAccount(
   const enabled = isTruthyEnabled(row.enabled);
   const dbActive = enabled && status === "active";
   const tok = inspectTokens(row.tokens, nowSec, leadSec);
-  const revokedLooking = isDeadErrorMessage(row.errorMessage);
+  // Permanent IdP death only — missing credentials are not "revokedLooking".
+  const revokedLooking = isPermanentRevocation(row.errorMessage);
   const errorStatus = status === "error";
 
   let usable = false;

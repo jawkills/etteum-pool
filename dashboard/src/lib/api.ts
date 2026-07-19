@@ -141,6 +141,26 @@ export async function refreshAccountQuota(accountId: number) {
   });
 }
 
+/** Provider OAuth/session token refresh (not quota). */
+export async function refreshAccountToken(accountId: number) {
+  return fetchApi(`/api/accounts/${accountId}/refresh-token`, {
+    method: "POST",
+  });
+}
+
+/** Server-side concurrent force refresh. */
+export async function refreshAccountTokensBulk(payload: {
+  ids?: number[];
+  provider?: string;
+  limit?: number;
+  concurrency?: number;
+}) {
+  return fetchApi(`/api/accounts/refresh-token-bulk`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function warmupAccount(accountId: number) {
   return fetchApi(`/api/accounts/${accountId}/warmup`, {
     method: "POST",
@@ -486,6 +506,46 @@ export async function startGrokFarm(payload: { count: number; concurrent?: numbe
 
 export async function stopGrokFarm() {
   return fetchApi(`/api/accounts/grok-cli/farm/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export type GrokReauthStatus = {
+  running: boolean;
+  target: number;
+  concurrent: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastMessage: string;
+  error: string | null;
+  pid: number | null;
+  jobFile: string | null;
+};
+
+export async function fetchGrokReauthStatus() {
+  return fetchApi<GrokReauthStatus>(`/api/accounts/grok-cli/reauth`);
+}
+
+export async function startGrokReauth(payload: {
+  onlyDead?: boolean;
+  ids?: number[];
+  concurrent?: number;
+}) {
+  return fetchApi<{ ok: boolean; target: number; skipped: number }>(
+    `/api/accounts/grok-cli/reauth`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function stopGrokReauth() {
+  return fetchApi(`/api/accounts/grok-cli/reauth/stop`, {
     method: "POST",
     body: JSON.stringify({}),
   });

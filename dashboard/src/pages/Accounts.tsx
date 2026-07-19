@@ -32,9 +32,12 @@ import {
   fetchGrokFarmStatus,
   startGrokFarm,
   stopGrokFarm,
+  startGrokReauth,
+  stopGrokReauth,
   type GrokFarmStatus,
   loginAccounts,
   loginAllAccounts,
+  refreshAccountTokensBulk,
   pollCodexOAuthStatus,
   revealByokKey,
   startCodexOAuthProxy,
@@ -822,6 +825,48 @@ export default function Accounts() {
     await load();
   }
 
+  /** Grok CLI: server-side force OAuth refresh (no client string-matching death policy). */
+  async function handleGrokRefreshTokens() {
+    try {
+      showSuccess("Refreshing Grok CLI tokens (server bulk)…");
+      const res = (await refreshAccountTokensBulk({
+        provider: "grok-cli",
+        limit: 50,
+        concurrency: 5,
+      })) as { total?: number; ok?: number; dead?: number; fail?: number; error?: string };
+      if (res.error) {
+        showError(new Error(res.error));
+        return;
+      }
+      showSuccess(
+        `Grok refresh: ${res.ok ?? 0} ok, ${res.dead ?? 0} dead, ${res.fail ?? 0} fail / ${res.total ?? 0}`
+      );
+      await load();
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  /** Grok CLI: re-login dead accounts that have stored password (or GROK_PASSWORD). */
+  async function handleGrokReauthDead() {
+    try {
+      showSuccess("Starting Grok reauth for dead accounts…");
+      const res = (await startGrokReauth({
+        onlyDead: true,
+        concurrent: 2,
+      })) as { data?: { target?: number }; skipped?: number; error?: string };
+      if ((res as any).error) {
+        showError(new Error((res as any).error));
+        return;
+      }
+      showSuccess(
+        `Grok reauth started: target=${res.data?.target ?? "?"} (skipped no-password=${res.skipped ?? 0}). Watch Login Logs.`
+      );
+    } catch (err) {
+      showError(err);
+    }
+  }
+
   const BYOK_KEY_PLACEHOLDER = "••••••••";
 
   const emptyByokForm = () => ({
@@ -1242,9 +1287,33 @@ export default function Accounts() {
                 <Button className="w-full" variant="outline" size="sm" onClick={() => handleWarmupProvider(stat.provider)} disabled={Boolean(warmupProgress[stat.provider])}>
                   <RefreshCw className="mr-1 h-4 w-4" /> Warmup
                 </Button>
-                <Button className="w-full" variant="outline" size="sm" onClick={() => handleRetryErrors(stat.provider)} disabled={stat.error === 0}>
-                  <RotateCcw className="mr-1 h-4 w-4" /> Retry
-                </Button>
+                {stat.provider === "grok-cli" ? (
+                  <div className="col-span-3 grid grid-cols-2 gap-2">
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleGrokRefreshTokens()}
+                      title="Force OAuth refresh_token (server bulk, max 50). Skips permanent invalid_grant."
+                    >
+                      <RotateCcw className="mr-1 h-4 w-4" /> Refresh tok
+                    </Button>
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleGrokReauthDead()}
+                      disabled={stat.error === 0}
+                      title="Re-login dead accounts with stored password (or GROK_PASSWORD). Farm = new accounts; Reauth = revive existing."
+                    >
+                      <RotateCcw className="mr-1 h-4 w-4" /> Reauth dead
+                    </Button>
+                  </div>
+                ) : (
+                  <Button className="w-full" variant="outline" size="sm" onClick={() => handleRetryErrors(stat.provider)} disabled={stat.error === 0}>
+                    <RotateCcw className="mr-1 h-4 w-4" /> Retry
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>

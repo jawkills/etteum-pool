@@ -9,8 +9,11 @@ import type { Account } from "../../db/schema";
 import { config } from "../../config";
 import {
   isDeadErrorMessage,
+  isMissingCredentialMessage,
+  isPermanentRevocation,
   parseExpiresAtSec,
 } from "../account-health";
+import type { ProveMode, SessionProveResult } from "../session-prove";
 
 export const GROK_CLI_TOKEN_LIMIT = 2_000_000;
 export const GROK_CLI_UPSTREAM_BASE =
@@ -249,7 +252,13 @@ export function classifyGrokCliError(status: number, body: string): GrokCliError
 
 /** True when error text means this account's refresh/session is permanently unusable. */
 export function isGrokCliDeadError(error?: string | null): boolean {
+  // Permanent IdP death OR missing credentials (runtime markError path).
   return isDeadErrorMessage(error);
+}
+
+/** IdP revocation only (invalid_grant) — reauth/re-farm. */
+export function isGrokCliPermanentRevocation(error?: string | null): boolean {
+  return isPermanentRevocation(error);
 }
 
 function formatGrokCliDeadError(detail: string): string {
@@ -898,6 +907,138 @@ export class GrokCliProvider extends BaseProvider {
   async validateAccount(account: Account): Promise<boolean> {
     const tokens = this.getTokens(account);
     return !!(tokens?.access_token && tokens?.refresh_token);
+  }
+
+  /**
+   * Shared OAuth prove for health (if-needed) and force refresh UI/API.
+   */
+  async proveSession(account: Account, mode: ProveMode): Promise<SessionProveResult> {
+    if (isPermanentRevocation(account.errorMessage)) {
+      return {
+        ok: false,
+        kind: "session_revoked",
+        error: account.errorMessage || formatGrokCliDeadError("refresh token revoked"),
+        refreshed: false,
+        healthKind: "session_expired",
+      };
+    }
+
+    const tokens = this.getTokens(account);
+    if (!tokens?.access_token || !tokens?.refresh_token) {
+      return {
+        ok: false,
+        kind: "missing_tokens",
+        error: "No access_token/refresh_token for grok-cli account",
+        refreshed: false,
+        healthKind: "missing_tokens",
+      };
+    }
+
+    const shouldRefresh =
+      mode === "force-refresh" ||
+      grokCliNeedsProactiveRefresh(tokens) ||
+      account.status === "error" ||
+      account.status === "pending";
+
+    if (!shouldRefresh) {
+      return {
+        ok: true,
+        kind: "healthy",
+        refreshed: false,
+        healthKind: "healthy",
+        message: "Access token within refresh lead window",
+      };
+    }
+
+    const refreshed = await this.refreshToken(account);
+    if (!refreshed.success || !refreshed.tokens) {
+      const err = refreshed.error || "refresh failed";
+      if (isPermanentRevocation(err) || isGrokCliDeadError(err)) {
+        return {
+          ok: false,
+          kind: "session_revoked",
+          error: formatGrokCliDeadError(err),
+          refreshed: false,
+          healthKind: "session_expired",
+        };
+      }
+      if (isMissingCredentialMessage(err)) {
+        return {
+          ok: false,
+          kind: "missing_tokens",
+          error: err,
+          refreshed: false,
+          healthKind: "missing_tokens",
+        };
+      }
+      return {
+        ok: false,
+        kind: "auth_error",
+        error: err,
+        refreshed: false,
+        healthKind: "auth_error",
+      };
+    }
+
+    let parsed: unknown = refreshed.tokens;
+    try {
+      parsed = JSON.parse(refreshed.tokens);
+    } catch {
+      /* keep string */
+    }
+    return {
+      ok: true,
+      kind: "healthy",
+      tokens: parsed,
+      refreshed: true,
+      healthKind: "healthy",
+      message: "Refresh token valid; access renewed",
+    };
+  }
+
+  /**
+   * OAuth-aware health via proveSession(if-needed).
+   * Never reports healthy for invalid_grant (permanent revocation).
+   */
+  override async healthCheck(account: Account): Promise<
+    import("./base").ProviderHealthResult
+  > {
+    const proved = await this.proveSession(account, "if-needed");
+    if (proved.ok) {
+      const quota = await this.fetchQuota(account);
+      return {
+        kind: "healthy",
+        success: true,
+        tokens: proved.tokens,
+        message: proved.message,
+        quota: quota.quota
+          ? { ...quota.quota, source: "grok-cli.fetchQuota" }
+          : undefined,
+      };
+    }
+    if (proved.kind === "session_revoked") {
+      return {
+        kind: "session_expired",
+        success: false,
+        retryable: false,
+        error: proved.error,
+        metadata: { permanentRevocation: true },
+      };
+    }
+    if (proved.kind === "missing_tokens") {
+      return {
+        kind: "missing_tokens",
+        success: false,
+        retryable: false,
+        error: proved.error,
+      };
+    }
+    return {
+      kind: "auth_error",
+      success: false,
+      retryable: true,
+      error: proved.error,
+    };
   }
 
   async fetchQuota(account: Account): Promise<{

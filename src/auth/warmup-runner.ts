@@ -5,6 +5,7 @@ import { providers } from "../proxy/router";
 import { pool, type ProviderName } from "../proxy/pool";
 import { broadcast } from "../ws/index";
 import { addAuthLog } from "./logs";
+import { isPermanentRevocation } from "../proxy/account-health";
 import type { ProviderHealthKind, ProviderHealthResult, ProviderQuotaSnapshot } from "../proxy/providers/base";
 
 type AccountStatus = "active" | "exhausted" | "error" | "pending" | string;
@@ -253,6 +254,25 @@ export function mapHealthToAccountUpdate(account: Account, health: ProviderHealt
 
   let status: AccountStatus = account.status;
   let errorMessage: string | null = account.errorMessage || null;
+
+  // Never resurrect permanent IdP death without a real prove (tokens from OAuth refresh).
+  if (
+    health.kind === "healthy" &&
+    isPermanentRevocation(account.errorMessage) &&
+    !health.tokens
+  ) {
+    return {
+      status: "error",
+      errorMessage: account.errorMessage || "Account session permanently revoked",
+      metadata: mergeWarmupMetadata(account, {
+        ...health,
+        kind: "session_expired",
+        success: false,
+        error: account.errorMessage || "Account session permanently revoked",
+        metadata: { ...(health.metadata || {}), permanentRevocation: true },
+      }),
+    };
+  }
 
   switch (health.kind) {
     case "healthy":
@@ -600,6 +620,53 @@ export async function warmupAccount(account: Account): Promise<WarmupResult> {
       status: "error",
       kind: "unsupported",
       error: `Provider not configured: ${account.provider}`,
+    };
+  }
+
+  // Short-circuit permanent IdP revocation only (not bare missing_tokens).
+  // Provider healthCheck remains the single prove path for everything else.
+  if (isPermanentRevocation(account.errorMessage)) {
+    const err = account.errorMessage || "Account session permanently revoked";
+    const startLog = addAuthLog({
+      type: "warmup_skipped_dead",
+      accountId: account.id,
+      email: account.email,
+      provider: account.provider,
+      step: "dead",
+      message: `WarmUp skipped revoked account ${account.provider}/${account.email}`,
+      error: err,
+    });
+    broadcast({
+      type: "warmup_skipped_dead",
+      data: {
+        logId: startLog.id,
+        id: account.id,
+        accountId: account.id,
+        email: account.email,
+        provider: account.provider,
+        step: "dead",
+        message: startLog.message,
+        error: err,
+        timestamp: startLog.timestamp,
+      },
+    });
+    if (account.status !== "error") {
+      await db
+        .update(accounts)
+        .set({ status: "error", errorMessage: err, updatedAt: new Date() })
+        .where(eq(accounts.id, account.id));
+      pool.invalidate(account.provider as ProviderName);
+    }
+    return {
+      success: false,
+      accountId: account.id,
+      provider: account.provider,
+      email: account.email,
+      previousStatus: account.status,
+      status: "error",
+      kind: "session_expired",
+      error: err,
+      message: "Skipped WarmUp: permanent session revocation (reauth/re-farm required)",
     };
   }
 

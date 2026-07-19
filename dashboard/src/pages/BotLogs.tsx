@@ -32,25 +32,54 @@ interface ProcessLog {
 const liveTypes: string[] = [
   "queue_added", "queue_processing", "login_progress", "login_success", "login_failed", "queue_complete", "queue_cleared",
   "grok_farm_started", "grok_farm_progress", "grok_farm_success", "grok_farm_failed", "grok_farm_complete",
+  "grok_reauth_started", "grok_reauth_progress", "grok_reauth_success", "grok_reauth_failed", "grok_reauth_complete",
 ];
 // Note: warmup_* events are explicitly filtered out - Login Logs shows login + grok farm
 
 function statusVariant(type: string): "success" | "warning" | "error" | "secondary" {
-  if (type.includes("success") || type === "queue_complete" || type === "warmup_complete" || type === "grok_farm_complete") return "success";
+  if (type.includes("success") || type === "queue_complete" || type === "warmup_complete" || type === "grok_farm_complete" || type === "grok_reauth_complete") return "success";
   if (type.includes("failed") || type.includes("auth_error")) return "error";
-  if (type.includes("processing") || type.includes("progress") || type.includes("exhausted") || type.includes("transient") || type.includes("unsupported") || type === "grok_farm_started") return "warning";
+  if (type.includes("processing") || type.includes("progress") || type.includes("exhausted") || type.includes("transient") || type.includes("unsupported") || type === "grok_farm_started" || type === "grok_reauth_started") return "warning";
   return "secondary";
 }
 
+const FAILURE_EVENT_TYPES = new Set([
+  "login_failed",
+  "warmup_auth_error",
+  "grok_farm_failed",
+  "grok_reauth_failed",
+]);
+const SUCCESS_EVENT_TYPES = new Set([
+  "login_success",
+  "warmup_success",
+  "grok_farm_success",
+  "grok_farm_complete",
+  "grok_reauth_success",
+  "grok_reauth_complete",
+]);
+
+/**
+ * Failure-wins outcome for a process group: if any failure event exists the
+ * group is "error" regardless of any later complete/success event. Used to
+ * avoid showing green next to "exit 2" when farm/reauth emit both.
+ */
+function processOutcome(process: ProcessLog): "error" | "success" | null {
+  if (process.events.some((log) => FAILURE_EVENT_TYPES.has(log.type))) return "error";
+  if (process.events.some((log) => SUCCESS_EVENT_TYPES.has(log.type))) return "success";
+  return null;
+}
+
 function processStatusVariant(process: ProcessLog): "success" | "warning" | "error" | "secondary" {
-  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success" || log.type === "grok_farm_success" || log.type === "grok_farm_complete")) return "success";
-  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error" || log.type === "grok_farm_failed")) return "error";
+  const outcome = processOutcome(process);
+  if (outcome === "error") return "error";
+  if (outcome === "success") return "success";
   return statusVariant(process.latest.type);
 }
 
 function processStatusLabel(process: ProcessLog) {
-  if (process.events.some((log) => log.type === "login_success" || log.type === "warmup_success" || log.type === "grok_farm_success" || log.type === "grok_farm_complete")) return "success";
-  if (process.events.some((log) => log.type === "login_failed" || log.type === "warmup_auth_error" || log.type === "grok_farm_failed")) return "error";
+  const outcome = processOutcome(process);
+  if (outcome === "error") return "error";
+  if (outcome === "success") return "success";
   return statusLabel(process.latest.type);
 }
 
@@ -65,6 +94,7 @@ function providerLabel(provider?: string) {
 function operationFor(type: string) {
   if (type.startsWith("warmup_")) return "WarmUp";
   if (type.startsWith("grok_farm_")) return "Grok Farm";
+  if (type.startsWith("grok_reauth_")) return "Grok Reauth";
   return "Login";
 }
 
@@ -73,6 +103,10 @@ function processKey(log: AuthLog) {
     // Group farm job-level events together; per-email when available
     if (log.email) return `Grok Farm-${log.email}`;
     return "Grok Farm-job";
+  }
+  if (log.type.startsWith("grok_reauth_")) {
+    if (log.email) return `Grok Reauth-${log.email}`;
+    return "Grok Reauth-job";
   }
   const account = log.accountId || log.email || log.id;
   return `${operationFor(log.type)}-${account}`;
@@ -187,13 +221,23 @@ export default function BotLogs() {
       setQueue((current: any) => ({ ...(current || {}), queued: 0, active: 0, processing: false }));
     }
     const data = msg.data || {};
+    const isGrokFarm = msg.type.startsWith("grok_farm_") || msg.type.startsWith("grok_reauth_");
+    // Farm/reauth events use auth-log serial ids — never treat as pool accountId.
+    const accountId =
+      typeof data.accountId === "number"
+        ? data.accountId
+        : !isGrokFarm && typeof data.id === "number" && data.email
+          ? data.id
+          : !isGrokFarm && typeof data.accountId === "string" && /^\d+$/.test(data.accountId)
+            ? Number(data.accountId)
+            : undefined;
     const log: AuthLog = {
       id: data.logId || data.id || Date.now(),
       timestamp: data.timestamp || new Date().toISOString(),
       type: msg.type,
-      accountId: data.accountId || data.id,
+      accountId,
       email: data.email,
-      provider: data.provider || (msg.type.startsWith("grok_farm_") ? "grok-cli" : undefined),
+      provider: data.provider || (isGrokFarm ? "grok-cli" : undefined),
       step: data.step,
       message: data.message || data.error || msg.type,
       error: data.error,
@@ -204,7 +248,13 @@ export default function BotLogs() {
   });
 
   const failed = useMemo(
-    () => logs.filter((log) => log.type === "login_failed" || log.type === "grok_farm_failed"),
+    () =>
+      logs.filter(
+        (log) =>
+          log.type === "login_failed" ||
+          log.type === "grok_farm_failed" ||
+          log.type === "grok_reauth_failed"
+      ),
     [logs]
   );
   const failedAccounts = useMemo(() => {
@@ -306,7 +356,15 @@ export default function BotLogs() {
             <div className="overflow-hidden rounded-md border border-[var(--error)]/20">
               {failedAccounts.map((log) => (
                 <div key={`failed-${log.accountId || log.id}-${log.provider || "unknown"}`} className="grid grid-cols-[1fr_auto] gap-3 border-b border-[var(--error)]/10 px-3 py-2 text-sm last:border-0 md:grid-cols-[240px_140px_1fr_auto]">
-                  <div className="truncate font-medium text-[var(--foreground)]">{log.email || `Account #${log.accountId}`}</div>
+                  <div className="truncate font-medium text-[var(--foreground)]">
+                    {log.email
+                      || (log.accountId ? `Account #${log.accountId}` : null)
+                      || (log.type?.startsWith("grok_farm_")
+                        ? "Grok Farm job"
+                        : log.type?.startsWith("grok_reauth_")
+                          ? "Grok Reauth job"
+                          : "Unknown")}
+                  </div>
                   <div className="text-xs text-[var(--muted-foreground)] md:text-sm">{providerLabel(log.provider)}</div>
                   <div className="col-span-2 truncate text-xs text-[var(--error)] md:col-span-1" title={log.error || log.message}>{log.error || log.message}</div>
                   <Button variant="ghost" size="sm" onClick={() => handleRetry(log.accountId)} disabled={!log.accountId}>

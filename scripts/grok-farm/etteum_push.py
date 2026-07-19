@@ -44,18 +44,25 @@ def parse_push_cli_flags(argv: list[str]) -> tuple[list[str], bool]:
 
 
 def account_to_import_item(result: dict[str, Any]) -> dict[str, Any]:
-    """Map http_farm save_result-shaped dict to etteum import item."""
+    """Map http_farm save_result-shaped dict to etteum import item.
+
+    Includes password when present so the pool can reauth later without re-farm.
+    """
     email = str(result.get("email") or "").strip()
     if not email:
         raise ValueError("email required")
+    password = result.get("password") or result.get("xai_password")
     tokens = result.get("tokens")
     if isinstance(tokens, dict) and (tokens.get("access_token") or tokens.get("accessToken")):
-        return {"email": email, "tokens": dict(tokens)}
+        item: dict[str, Any] = {"email": email, "tokens": dict(tokens)}
+        if password:
+            item["password"] = str(password)
+        return item
     access = result.get("access_token") or result.get("accessToken")
     refresh = result.get("refresh_token") or result.get("refreshToken")
     if not access or not refresh:
         raise ValueError("access_token and refresh_token required")
-    item: dict[str, Any] = {
+    item = {
         "email": email,
         "access_token": access,
         "refresh_token": refresh,
@@ -63,6 +70,8 @@ def account_to_import_item(result: dict[str, Any]) -> dict[str, Any]:
     for k in ("id_token", "expires_at", "client_id", "team_id", "sub"):
         if result.get(k):
             item[k] = result[k]
+    if password:
+        item["password"] = str(password)
     return item
 
 

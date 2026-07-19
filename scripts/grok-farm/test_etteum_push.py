@@ -25,7 +25,8 @@ class TestAccountToImportItem(unittest.TestCase):
         self.assertEqual(item["email"], "a@x.com")
         self.assertEqual(item["tokens"]["access_token"], "at")
         self.assertEqual(item["tokens"]["refresh_token"], "rt")
-        self.assertNotIn("password", item)
+        # Password is forwarded so pool can reauth dead accounts later.
+        self.assertEqual(item["password"], "pw")
 
     def test_flat_tokens_still_works(self):
         result = {
