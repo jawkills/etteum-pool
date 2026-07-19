@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parseGrokFarmLogLine } from "./grok-farm-log";
-import { createIdleGrokFarmStatus } from "./grok-farm-queue";
-import { GrokProcessLatch } from "./grok-farm-process";
+import { parseGrokFarmLogLine } from "./log";
+import { createIdleGrokFarmStatus } from "./farm-queue";
+import { GrokProcessLatch } from "./process";
 
 describe("createIdleGrokFarmStatus", () => {
   test("idle shape", () => {

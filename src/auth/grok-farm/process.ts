@@ -4,16 +4,16 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { broadcast } from "../ws/index";
-import { pool } from "../proxy/pool";
-import type { ProviderName } from "../proxy/pool";
-import { addAuthLog } from "./logs";
+import { broadcast } from "../../ws/index";
+import { pool } from "../../proxy/pool";
+import type { ProviderName } from "../../proxy/pool";
+import { addAuthLog } from "../logs";
 import {
   grokFarmChildEnv,
   resolveGrokFarmApiKey,
   resolveGrokFarmPython,
   type GrokFarmPython,
-} from "./grok-farm-spawn";
+} from "./spawn";
 
 const GROK_PROVIDER: ProviderName = "grok-cli";
 

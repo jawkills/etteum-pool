@@ -3,10 +3,10 @@
  */
 
 import { eq, inArray } from "drizzle-orm";
-import { db } from "../db/index";
-import { accounts } from "../db/schema";
-import { decrypt } from "../utils/crypto";
-import { isPermanentRevocation, isPlaceholderPassword } from "../proxy/account-health";
+import { db } from "../../db/index";
+import { accounts } from "../../db/schema";
+import { decrypt } from "../../utils/crypto";
+import { isPermanentRevocation, isPlaceholderPassword } from "../../proxy/account-health";
 
 export type GrokReauthJob = { email: string; password: string };
 

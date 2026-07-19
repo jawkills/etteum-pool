@@ -5,11 +5,11 @@
 
 import type { Context } from "hono";
 import { eq } from "drizzle-orm";
-import { db } from "../db/index";
-import { accounts } from "../db/schema";
-import { encrypt } from "../utils/crypto";
-import { broadcast } from "../ws/index";
-import { pool } from "../proxy/pool";
+import { db } from "../../db/index";
+import { accounts } from "../../db/schema";
+import { encrypt } from "../../utils/crypto";
+import { broadcast } from "../../ws/index";
+import { pool } from "../../proxy/pool";
 
 type CreateBody = {
   provider: string;

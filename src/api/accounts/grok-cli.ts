@@ -5,15 +5,15 @@
 
 import type { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { db } from "../db/index";
-import { accounts } from "../db/schema";
-import { encrypt } from "../utils/crypto";
-import { broadcast } from "../ws/index";
-import { pool, type ProviderName } from "../proxy/pool";
-import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../proxy/providers/grok-cli";
-import { grokFarmQueue } from "../auth/grok-farm-queue";
-import { grokReauthQueue } from "../auth/grok-reauth-queue";
-import { isPlaceholderPassword } from "../proxy/account-health";
+import { db } from "../../db/index";
+import { accounts } from "../../db/schema";
+import { encrypt } from "../../utils/crypto";
+import { broadcast } from "../../ws/index";
+import { pool, type ProviderName } from "../../proxy/pool";
+import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../../proxy/providers/grok-cli";
+import { grokFarmQueue } from "../../auth/grok-farm/farm-queue";
+import { grokReauthQueue } from "../../auth/grok-farm/reauth-queue";
+import { isPlaceholderPassword } from "../../proxy/account-health";
 
 export function registerGrokCliAccountRoutes(router: Hono): void {
   /**

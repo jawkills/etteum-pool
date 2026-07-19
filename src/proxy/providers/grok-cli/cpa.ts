@@ -1,6 +1,6 @@
 /** CPA / token shape normalize for grok-cli import + refresh. */
 
-import { GROK_CLI_CLIENT_ID } from "./grok-cli-constants";
+import { GROK_CLI_CLIENT_ID } from "./constants";
 
 export type GrokCliTokens = {
   access_token: string;

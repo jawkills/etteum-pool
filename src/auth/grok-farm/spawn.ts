@@ -5,8 +5,8 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { config } from "../config";
-import { getActiveApiKey } from "../api/keys";
+import { config } from "../../config";
+import { getActiveApiKey } from "../../api/keys";
 
 export type GrokFarmPython = {
   farmDir: string;

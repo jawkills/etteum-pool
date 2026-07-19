@@ -3,9 +3,9 @@
  * Free functions — provider class only owns session policy + locks.
  */
 
-import type { Account } from "../../db/schema";
-import { config } from "../../config";
-import type { ChatCompletionRequest, ChatCompletionResponse, ProviderResult } from "./base";
+import type { Account } from "../../../db/schema";
+import { config } from "../../../config";
+import type { ChatCompletionRequest, ChatCompletionResponse, ProviderResult } from "../base";
 import {
   GROK_CLI_CLIENT_ID,
   GROK_CLI_CREDIT_SOFT_ERROR,
@@ -13,12 +13,12 @@ import {
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_TOKEN_URL,
   GROK_CLI_UPSTREAM_BASE,
-} from "./grok-cli-constants";
-import { type GrokCliTokens, normalizeGrokCliCpa } from "./grok-cli-cpa";
+} from "./constants";
+import { type GrokCliTokens, normalizeGrokCliCpa } from "./cpa";
 import {
   classifyGrokCliError,
   quotaFromGrokCliCenterSignals,
-} from "./grok-cli-errors";
+} from "./errors";
 import {
   type GrokCliImageRequestOpts,
   type GrokCliImageResult,
@@ -27,10 +27,10 @@ import {
   emptyGrokCliUsage,
   extractGrokCliImageGenerationResults,
   normalizeGrokCliUsage,
-} from "./grok-cli-image";
-import { normalizeGrokCliMessagesForOpenAI } from "./grok-cli-messages";
-import { parseGrokCliModelId, resolveGrokCliUpstreamModel } from "./grok-cli-models";
-import { buildGrokCliHeaders } from "./grok-cli-headers";
+} from "./image";
+import { normalizeGrokCliMessagesForOpenAI } from "./messages";
+import { parseGrokCliModelId, resolveGrokCliUpstreamModel } from "./models";
+import { buildGrokCliHeaders } from "./headers";
 
 export type FetchWithTimeout = (
   url: string,

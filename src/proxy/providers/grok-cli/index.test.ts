@@ -21,7 +21,7 @@ import {
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
   GROK_CLI_CREDIT_SOFT_ERROR,
-} from "./grok-cli";
+} from "./index";
 
 describe("normalizeGrokCliCpa", () => {
   test("accepts flat CPA", () => {
@@ -256,7 +256,7 @@ describe("isGrokCliDeadError", () => {
   });
   test("missing credentials stay non-permanent (WarmUp must not latch)", async () => {
     const { isPermanentRevocation, isMissingCredentialMessage } = await import(
-      "../account-health"
+      "../../account-health"
     );
     const msg = "No access_token for grok-cli account";
     expect(isGrokCliDeadError(msg)).toBe(true);

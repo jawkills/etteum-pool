@@ -4,8 +4,8 @@ import {
   isDeadErrorMessage,
   isMissingCredentialMessage,
   isPermanentRevocation,
-} from "../account-health";
-import { GROK_CLI_CREDIT_SOFT_ERROR, GROK_CLI_TOKEN_LIMIT } from "./grok-cli-constants";
+} from "../../account-health";
+import { GROK_CLI_CREDIT_SOFT_ERROR, GROK_CLI_TOKEN_LIMIT } from "./constants";
 
 export type GrokCliErrorKind = "exhausted" | "dead" | "auth" | null;
 

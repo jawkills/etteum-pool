@@ -101,5 +101,5 @@ TS parser: `src/auth/grok-farm-queue.ts` → `parseGrokFarmLogLine`.
 ```bash
 cd scripts/grok-farm
 # with venv active:
-python -m unittest test_etteum_push test_proxy_rotate -v
+python -m unittest discover -s tests -v
 ```

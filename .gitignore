@@ -105,3 +105,12 @@ scripts/grok-farm/proxies.txt
 scripts/grok-farm/__pycache__/
 scripts/grok-farm/*.pyc
 
+
+# local tool / err noise
+.etteum.log.err
+.omo/
+.zcode/
+
+# grok farm runtime outputs (keep package clean)
+scripts/grok-farm/results/
+scripts/grok-farm/__pycache__/

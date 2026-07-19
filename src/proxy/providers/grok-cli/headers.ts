@@ -3,9 +3,9 @@
 import {
   GROK_CLI_CLIENT_IDENTIFIER,
   GROK_CLI_CLIENT_VERSION,
-} from "./grok-cli-constants";
-import type { GrokCliTokens } from "./grok-cli-cpa";
-import { resolveGrokCliUpstreamModel } from "./grok-cli-models";
+} from "./constants";
+import type { GrokCliTokens } from "./cpa";
+import { resolveGrokCliUpstreamModel } from "./models";
 
 export function buildGrokCliHeaders(
   tokens: Pick<

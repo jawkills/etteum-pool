@@ -1,6 +1,6 @@
 /** Anthropic / block-array → OpenAI chat message normalize for cli-chat-proxy. */
 
-import type { ChatCompletionRequest } from "./base";
+import type { ChatCompletionRequest } from "../base";
 
 /** Collapse Anthropic/OpenAI content blocks to a single string. */
 export function grokCliContentBlocksToText(content: unknown): string {

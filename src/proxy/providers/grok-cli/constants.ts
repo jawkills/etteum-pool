@@ -1,6 +1,6 @@
 /** Shared Grok CLI env/constants (no class, no I/O). */
 
-import { DEFAULT_GROK_CLI_REFRESH_LEAD_SEC } from "./grok-cli-settings";
+import { DEFAULT_GROK_CLI_REFRESH_LEAD_SEC } from "./settings";
 
 export const GROK_CLI_TOKEN_LIMIT = 2_000_000;
 export const GROK_CLI_UPSTREAM_BASE =

@@ -5,8 +5,8 @@ import {
   getCachedGrokCliRuntimeSettings,
   invalidateGrokCliSettingsCache,
   isGrokCliSettingKey,
-} from "./grok-cli-settings";
-import { GROK_CLI_REFRESH_LEAD_SEC, grokCliProvider } from "./grok-cli";
+} from "./settings";
+import { GROK_CLI_REFRESH_LEAD_SEC, grokCliProvider } from "./index";
 
 describe("grok-cli-settings", () => {
   test("defaults match prior hardcodes and single lead source", () => {
