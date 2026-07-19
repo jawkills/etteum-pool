@@ -298,6 +298,7 @@ export interface IntegrationModelDTO {
   max_output?: number;
   thinking?: boolean;
   vision?: boolean;
+  tools?: boolean;
 }
 
 export interface IntegrationClientsData {

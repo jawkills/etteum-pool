@@ -13,6 +13,8 @@ interface ModelData {
   context_window?: number;
   max_output?: number;
   thinking?: boolean;
+  vision?: boolean;
+  tools?: boolean;
 }
 
 const providerColors: Record<string, string> = {
@@ -203,11 +205,23 @@ export default function Models() {
 
                     {/* Features */}
                     <td className="py-3 px-4">
-                      {model.thinking && (
-                        <Badge variant="default" className="text-xs">
-                          Thinking
-                        </Badge>
-                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {model.thinking && (
+                          <Badge variant="default" className="text-xs">
+                            Thinking
+                          </Badge>
+                        )}
+                        {model.vision && (
+                          <Badge variant="secondary" className="text-xs">
+                            Vision
+                          </Badge>
+                        )}
+                        {model.tools && (
+                          <Badge variant="outline" className="text-xs">
+                            Tools
+                          </Badge>
+                        )}
+                      </div>
                     </td>
 
                     {/* Actions */}

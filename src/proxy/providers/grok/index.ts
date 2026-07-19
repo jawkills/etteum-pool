@@ -143,8 +143,15 @@ export class GrokProvider extends BaseProvider {
       created: Date.now(),
       owned_by: "grok",
       context_window: 500_000,
+      // xAI announcement: grok-4.5 averages ~15,954 output tokens per task;
+      // no hard output ceiling is published. Rounded up to a practical 16K
+      // budget so the dashboard's "Output" column reflects a realistic value
+      // rather than blank.
+      max_output: 16_000,
       thinking: true,
       vision: true,
+      // xAI docs grok-4.5 lists Function calling as a capability.
+      tools: true,
       creditUnit: "token" as const,
       creditRate: 1,
       creditSource: "estimated" as const,

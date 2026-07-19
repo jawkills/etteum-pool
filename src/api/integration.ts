@@ -245,6 +245,7 @@ integrationRouter.get("/clients", async (c) => {
       max_output: m.max_output,
       thinking: m.thinking,
       vision: m.vision,
+      tools: m.tools,
     }));
     return c.json({ clients, models });
   } catch (error: any) {
