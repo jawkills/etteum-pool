@@ -269,6 +269,24 @@ describe("constants", () => {
   });
 });
 
+describe("quota probe model (regression)", () => {
+  // WarmUp mass-exhausted 627 accounts because the probe body sent
+  // model "grok-4" — a non-entitled model the center rejects with 402 for
+  // every free/personal team. Catalog upstream is "grok-4.5" only.
+  test("catalog upstream model is grok-4.5", () => {
+    expect(resolveGrokCliUpstreamModel("grok-4.5")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-high")).toBe("grok-4.5");
+    expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-low")).toBe("grok-4.5");
+  });
+  test("grok-4 (no .5) is NOT the catalog upstream", () => {
+    // The buggy probe sent this exact string. Resolve must keep it as the
+    // catalog upstream; rejecting "grok-4" is the provider's job upstream,
+    // but the probe body must use what resolve returns for a catalog id.
+    expect(resolveGrokCliUpstreamModel("grok-4.5")).not.toBe("grok-4");
+  });
+});
+
 describe("image helpers", () => {
   test("stripGrokCliDataUrlPrefix removes data URL wrapper", () => {
     expect(stripGrokCliDataUrlPrefix("data:image/png;base64,abc123")).toBe("abc123");

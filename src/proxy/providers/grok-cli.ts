@@ -1329,6 +1329,10 @@ export class GrokCliProvider extends BaseProvider {
 
     // Tiny non-stream probe — same path as live traffic; center returns
     // x-ratelimit-* on OK or 402 spending-limit / 429 free-usage body.
+    // Probe model MUST be a real catalog upstream (grok-4.5). Using a model
+    // the center doesn't entitlement (e.g. "grok-4") returns 402 for every
+    // account and mass-exhausts the pool on WarmUp.
+    const PROBE_MODEL = resolveGrokCliUpstreamModel("grok-4.5");
     try {
       const response = await this.fetchWithTimeout(
         `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
@@ -1336,10 +1340,10 @@ export class GrokCliProvider extends BaseProvider {
           method: "POST",
           headers: buildGrokCliHeaders(
             { ...tokens, email: account.email || tokens.email },
-            "grok-4"
+            PROBE_MODEL
           ),
           body: JSON.stringify({
-            model: "grok-4",
+            model: PROBE_MODEL,
             messages: [{ role: "user", content: "1" }],
             max_tokens: 1,
             stream: false,
