@@ -503,9 +503,12 @@ export default function AccountList() {
           <Button variant="outline" size="sm" onClick={handleWarmupAll}>
             <RefreshCw className="w-4 h-4 mr-2" /> Warmup All
           </Button>
-          <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
-            <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
-          </Button>
+          {/* grok-cli has no browser login queue — use Accounts Refresh tok / Reauth instead */}
+          {provider !== "grok-cli" && (
+            <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
+              <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
             <CheckCircle2 className="w-4 h-4 mr-2 text-[var(--success)]" /> Enable All ({disabledCount})
           </Button>
@@ -659,9 +662,12 @@ export default function AccountList() {
                         <Button variant="ghost" size="icon" onClick={() => handleWarmup(account.id)} title="WarmUp">
                           <RefreshCw className="w-4 h-4 text-[var(--warning)]" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
-                          <RotateCcw className="w-4 h-4" />
-                        </Button>
+                        {/* grok-cli has no auto-login bot path — Refresh tok / Reauth live on Accounts */}
+                        {account.provider !== "grok-cli" && (
+                          <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
+                            <RotateCcw className="w-4 h-4" />
+                          </Button>
+                        )}
                         <Button variant="ghost" size="icon" onClick={() => handleDelete(account.id)} title="Delete">
                           <Trash2 className="w-4 h-4 text-[var(--error)]" />
                         </Button>

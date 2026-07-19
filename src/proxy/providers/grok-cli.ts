@@ -250,9 +250,13 @@ export function classifyGrokCliError(status: number, body: string): GrokCliError
   return null;
 }
 
-/** True when error text means this account's refresh/session is permanently unusable. */
+/**
+ * True when this account must not be selected for traffic.
+ * Includes permanent IdP death AND missing credentials.
+ * For WarmUp short-circuit / permanent latch, use isPermanentRevocation only —
+ * missing-creds must stay diagnosable and reauthable.
+ */
 export function isGrokCliDeadError(error?: string | null): boolean {
-  // Permanent IdP death OR missing credentials (runtime markError path).
   return isDeadErrorMessage(error);
 }
 
@@ -261,11 +265,18 @@ export function isGrokCliPermanentRevocation(error?: string | null): boolean {
   return isPermanentRevocation(error);
 }
 
+/**
+ * Prefix permanent IdP death only. Never wrap missing-credential messages —
+ * "Grok CLI dead:" is itself an isPermanentRevocation match, so formatting
+ * "no access_token" this way would latch WarmUp forever and block reauth.
+ */
 function formatGrokCliDeadError(detail: string): string {
   const cleaned = (detail || "").replace(/\s+/g, " ").trim().slice(0, 200);
-  return cleaned.startsWith("Grok CLI dead:")
-    ? cleaned
-    : `Grok CLI dead: ${cleaned || "refresh token revoked"}`;
+  if (!cleaned) return "Grok CLI dead: refresh token revoked";
+  if (cleaned.toLowerCase().startsWith("grok cli dead:")) return cleaned;
+  // Preserve missing-credential wording so isMissingCredentialMessage still matches.
+  if (isMissingCredentialMessage(cleaned)) return cleaned;
+  return `Grok CLI dead: ${cleaned}`;
 }
 
 /** Parse expires_at from unix sec/ms or ISO-8601 string. */
@@ -367,9 +378,10 @@ export class GrokCliProvider extends BaseProvider {
   }> {
     const tokens = this.getTokens(account);
     if (!tokens?.access_token) {
+      // Unusable for traffic, but not permanent IdP death — keep plain wording.
       return {
         account,
-        error: formatGrokCliDeadError("No access_token for grok-cli account"),
+        error: "No access_token for grok-cli account",
         dead: true,
       };
     }
@@ -378,10 +390,15 @@ export class GrokCliProvider extends BaseProvider {
     const refreshed = await this.refreshToken(account);
     if (!refreshed.success || !refreshed.tokens) {
       const err = refreshed.error || "refresh failed";
+      const permanent = isPermanentRevocation(err);
       const dead = isGrokCliDeadError(err);
       return {
         account,
-        error: dead ? formatGrokCliDeadError(err) : `Grok CLI auth: ${err}`,
+        error: permanent
+          ? formatGrokCliDeadError(err)
+          : dead
+            ? err
+            : `Grok CLI auth: ${err}`,
         dead,
       };
     }
@@ -401,9 +418,11 @@ export class GrokCliProvider extends BaseProvider {
   > {
     const fresh = await this.ensureFreshTokens(account);
     if (fresh.dead || (fresh.error && isGrokCliDeadError(fresh.error))) {
+      const err = fresh.error || "refresh token revoked";
       return {
         ok: false,
-        error: formatGrokCliDeadError(fresh.error || "refresh token revoked"),
+        // Permanent IdP only gets the "Grok CLI dead:" latch prefix.
+        error: isPermanentRevocation(err) ? formatGrokCliDeadError(err) : err,
         deadAccount: true,
       };
     }
@@ -469,10 +488,15 @@ export class GrokCliProvider extends BaseProvider {
       };
     }
     const err = refreshed.error || "refresh failed";
+    const permanent = isPermanentRevocation(err);
     const dead = isGrokCliDeadError(err);
     return {
       kind: "auth_failed",
-      error: dead ? formatGrokCliDeadError(err) : `Grok CLI auth: ${err}`,
+      error: permanent
+        ? formatGrokCliDeadError(err)
+        : dead
+          ? err
+          : `Grok CLI auth: ${err}`,
       deadAccount: dead,
     };
   }
@@ -953,7 +977,9 @@ export class GrokCliProvider extends BaseProvider {
     const refreshed = await this.refreshToken(account);
     if (!refreshed.success || !refreshed.tokens) {
       const err = refreshed.error || "refresh failed";
-      if (isPermanentRevocation(err) || isGrokCliDeadError(err)) {
+      // Permanent IdP first — isGrokCliDeadError also matches missing-creds,
+      // so do NOT fold them into session_revoked (that would latch WarmUp).
+      if (isPermanentRevocation(err)) {
         return {
           ok: false,
           kind: "session_revoked",

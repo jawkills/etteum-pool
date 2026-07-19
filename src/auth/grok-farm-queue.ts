@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { config } from "../config";
-import { getActiveApiKey } from "../api/keys";
 import { broadcast } from "../ws/index";
 import { pool } from "../proxy/pool";
 import { addAuthLog } from "./logs";
+import {
+  grokFarmChildEnv,
+  resolveGrokFarmApiKey,
+  resolveGrokFarmPython,
+} from "./grok-farm-spawn";
 
 export type GrokFarmStatus = {
   running: boolean;
@@ -166,38 +167,21 @@ class GrokFarmQueue {
     try {
       const count = Math.max(1, Math.min(1000, Math.floor(opts.count)));
       const concurrent = Math.max(1, Math.min(20, Math.floor(opts.concurrent)));
-      const farmDir = config.grokFarmDir;
-      const script = path.join(farmDir, "http_farm.py");
 
-      if (!existsSync(script)) {
+      const py = resolveGrokFarmPython();
+      if (!py.ok) {
         this.startLock = false;
-        return {
-          ok: false,
-          error: `http_farm.py not found at ${script}. Expected in-tree scripts/grok-farm (or set GROK_FARM_DIR).`,
-        };
+        return { ok: false, error: py.error };
       }
 
-      // Prefer DB/dashboard active key over stale env-only config.apiKey.
-      const apiKey = (await getActiveApiKey()) || config.apiKey;
-      if (!apiKey) {
+      const key = await resolveGrokFarmApiKey();
+      if (!key.ok) {
         this.startLock = false;
-        return { ok: false, error: "API_KEY not set (needed for farm push to etteum)" };
+        return { ok: false, error: key.error };
       }
 
-      const etteumUrl = process.env.ETTEUM_PUBLIC_URL || `http://127.0.0.1:${config.port}`;
-
-      // Prefer in-tree venv python if installed (Windows / Unix)
-      const venvWin = path.join(farmDir, ".venv", "Scripts", "python.exe");
-      const venvUnix = path.join(farmDir, ".venv", "bin", "python");
-      let pyBin = config.grokFarmPython;
-      let pyArgs = [...config.grokFarmPythonArgs];
-      if (existsSync(venvWin)) {
-        pyBin = venvWin;
-        pyArgs = [];
-      } else if (existsSync(venvUnix)) {
-        pyBin = venvUnix;
-        pyArgs = [];
-      }
+      const { farmDir, script, pyBin, pyArgs } = py.value;
+      const { apiKey, etteumUrl } = key;
 
       this.attemptEmail.clear();
       this.setStatus({
@@ -222,18 +206,7 @@ class GrokFarmQueue {
 
       const child = spawn(pyBin, spawnArgs, {
         cwd: farmDir,
-        env: {
-          ...process.env,
-          ETTEUM_URL: etteumUrl,
-          ETTEUM_API_KEY: apiKey,
-          API_KEY: apiKey,
-          GROK_PUSH_ETTEUM: "true",
-          GROK_PUSH_MODE: "per_success",
-          // Force line logs (not HUD) so etteum can parse STEP/OK/FAIL
-          GROK_UI: "log",
-          GROK_VERBOSE: "true",
-          PYTHONUNBUFFERED: "1",
-        },
+        env: grokFarmChildEnv(apiKey, etteumUrl),
         windowsHide: true,
       });
 
@@ -283,7 +256,8 @@ class GrokFarmQueue {
           running: false,
           finishedAt: new Date().toISOString(),
           lastMessage: ok ? "farm finished" : `farm exit ${code}`,
-          error: !ok ? `exit ${code}` : this.status.error,
+          // Clear stale error on success (parity with reauth queue).
+          error: ok ? null : `exit ${code}`,
         });
         this.emitLog({
           type: ok ? "grok_farm_complete" : "grok_farm_failed",

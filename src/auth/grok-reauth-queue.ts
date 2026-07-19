@@ -4,12 +4,10 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import { config } from "../config";
-import { getActiveApiKey } from "../api/keys";
 import { db } from "../db/index";
 import { accounts } from "../db/schema";
 import { decrypt } from "../utils/crypto";
@@ -18,6 +16,11 @@ import { pool } from "../proxy/pool";
 import { isPermanentRevocation, isPlaceholderPassword } from "../proxy/account-health";
 import { addAuthLog } from "./logs";
 import { parseGrokFarmLogLine } from "./grok-farm-queue";
+import {
+  grokFarmChildEnv,
+  resolveGrokFarmApiKey,
+  resolveGrokFarmPython,
+} from "./grok-farm-spawn";
 
 export type GrokReauthStatus = {
   running: boolean;
@@ -169,14 +172,10 @@ class GrokReauthQueue {
     this.startLock = true;
 
     try {
-      const farmDir = config.grokFarmDir;
-      const script = path.join(farmDir, "http_farm.py");
-      if (!existsSync(script)) {
+      const py = resolveGrokFarmPython();
+      if (!py.ok) {
         this.startLock = false;
-        return {
-          ok: false,
-          error: `http_farm.py not found at ${script}`,
-        };
+        return { ok: false, error: py.error };
       }
 
       const { jobs, skipped } = await this.resolveJobs({
@@ -196,10 +195,10 @@ class GrokReauthQueue {
         };
       }
 
-      const apiKey = (await getActiveApiKey()) || config.apiKey;
-      if (!apiKey) {
+      const key = await resolveGrokFarmApiKey();
+      if (!key.ok) {
         this.startLock = false;
-        return { ok: false, error: "API_KEY not set (needed for reauth push)" };
+        return { ok: false, error: key.error };
       }
 
       const concurrent = Math.max(1, Math.min(10, Math.floor(opts.concurrent || 2)));
@@ -208,19 +207,8 @@ class GrokReauthQueue {
       writeFileSync(jobFile, JSON.stringify(jobs, null, 0), "utf8");
       this.jobDir = jobDir;
 
-      const venvWin = path.join(farmDir, ".venv", "Scripts", "python.exe");
-      const venvUnix = path.join(farmDir, ".venv", "bin", "python");
-      let pyBin = config.grokFarmPython;
-      let pyArgs = [...config.grokFarmPythonArgs];
-      if (existsSync(venvWin)) {
-        pyBin = venvWin;
-        pyArgs = [];
-      } else if (existsSync(venvUnix)) {
-        pyBin = venvUnix;
-        pyArgs = [];
-      }
-
-      const etteumUrl = process.env.ETTEUM_PUBLIC_URL || `http://127.0.0.1:${config.port}`;
+      const { farmDir, script, pyBin, pyArgs } = py.value;
+      const { apiKey, etteumUrl } = key;
 
       this.setStatus({
         ...createIdleGrokReauthStatus(),
@@ -246,17 +234,7 @@ class GrokReauthQueue {
 
       const child = spawn(pyBin, spawnArgs, {
         cwd: farmDir,
-        env: {
-          ...process.env,
-          ETTEUM_URL: etteumUrl,
-          ETTEUM_API_KEY: apiKey,
-          API_KEY: apiKey,
-          GROK_PUSH_ETTEUM: "true",
-          GROK_PUSH_MODE: "per_success",
-          GROK_UI: "log",
-          GROK_VERBOSE: "true",
-          PYTHONUNBUFFERED: "1",
-        },
+        env: grokFarmChildEnv(apiKey, etteumUrl),
         windowsHide: true,
       });
 

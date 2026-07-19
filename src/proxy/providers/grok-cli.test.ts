@@ -144,12 +144,25 @@ describe("isGrokCliDeadError", () => {
     expect(isGrokCliDeadError('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
     expect(isGrokCliDeadError("Refresh token has been revoked")).toBe(true);
     expect(isGrokCliDeadError("Grok CLI dead: invalid_grant")).toBe(true);
+    // Missing credentials are unusable for traffic (dead) but not permanent IdP death.
     expect(isGrokCliDeadError("No access_token for grok-cli account")).toBe(true);
   });
   test("does not match generic auth/network", () => {
     expect(isGrokCliDeadError("Grok CLI auth: unauthorized")).toBe(false);
     expect(isGrokCliDeadError("timeout")).toBe(false);
     expect(isGrokCliDeadError(null)).toBe(false);
+  });
+  test("missing credentials stay non-permanent (WarmUp must not latch)", async () => {
+    const { isPermanentRevocation, isMissingCredentialMessage } = await import(
+      "../account-health"
+    );
+    const msg = "No access_token for grok-cli account";
+    expect(isGrokCliDeadError(msg)).toBe(true);
+    expect(isMissingCredentialMessage(msg)).toBe(true);
+    expect(isPermanentRevocation(msg)).toBe(false);
+    // The permanent latch string itself must only match real IdP death.
+    expect(isPermanentRevocation("Grok CLI dead: invalid_grant")).toBe(true);
+    expect(isPermanentRevocation(msg)).toBe(false);
   });
 });
 

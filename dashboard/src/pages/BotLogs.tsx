@@ -305,11 +305,42 @@ export default function BotLogs() {
   }
 
   async function handleRetryAll() {
-    const ids = Array.from(new Set(failedAccounts.map((log) => log.accountId).filter((id): id is number => Boolean(id))));
+    // Skip grok farm/reauth rows — they have no auto-login-bot path.
+    const ids = Array.from(
+      new Set(
+        failedAccounts
+          .filter(
+            (log) =>
+              log.provider !== "grok-cli" &&
+              !log.type?.startsWith("grok_farm_") &&
+              !log.type?.startsWith("grok_reauth_"),
+          )
+          .map((log) => log.accountId)
+          .filter((id): id is number => Boolean(id)),
+      ),
+    );
     if (ids.length === 0) return;
     await loginAccounts(ids);
     await load().catch(() => {});
   }
+
+  const retryableFailedCount = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          failedAccounts
+            .filter(
+              (log) =>
+                log.provider !== "grok-cli" &&
+                !log.type?.startsWith("grok_farm_") &&
+                !log.type?.startsWith("grok_reauth_"),
+            )
+            .map((log) => log.accountId)
+            .filter((id): id is number => Boolean(id)),
+        ),
+      ).length,
+    [failedAccounts],
+  );
 
   return (
     <div className="space-y-6">
@@ -347,9 +378,11 @@ export default function BotLogs() {
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <CardTitle className="text-base flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-[var(--error)]" /> Failed Accounts</CardTitle>
-              <Button variant="outline" size="sm" onClick={handleRetryAll}>
-                <RotateCcw className="mr-2 h-4 w-4" /> Retry All ({failedAccounts.length})
-              </Button>
+              {retryableFailedCount > 0 && (
+                <Button variant="outline" size="sm" onClick={handleRetryAll}>
+                  <RotateCcw className="mr-2 h-4 w-4" /> Retry All ({retryableFailedCount})
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -367,9 +400,14 @@ export default function BotLogs() {
                   </div>
                   <div className="text-xs text-[var(--muted-foreground)] md:text-sm">{providerLabel(log.provider)}</div>
                   <div className="col-span-2 truncate text-xs text-[var(--error)] md:col-span-1" title={log.error || log.message}>{log.error || log.message}</div>
-                  <Button variant="ghost" size="sm" onClick={() => handleRetry(log.accountId)} disabled={!log.accountId}>
-                    <RotateCcw className="mr-1 h-3 w-3" /> Retry
-                  </Button>
+                  {/* grok farm/reauth failures are not auto-login-bot retries */}
+                  {log.provider === "grok-cli" || log.type?.startsWith("grok_farm_") || log.type?.startsWith("grok_reauth_") ? (
+                    <span className="text-xs text-[var(--muted-foreground)] self-center">Use Refresh/Reauth</span>
+                  ) : (
+                    <Button variant="ghost" size="sm" onClick={() => handleRetry(log.accountId)} disabled={!log.accountId}>
+                      <RotateCcw className="mr-1 h-3 w-3" /> Retry
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
