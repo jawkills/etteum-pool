@@ -9,6 +9,11 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import {
+  applyCodeBuddyUserIdHeader,
+  classifyCodeBuddyHttpFailure,
+  parseCodeBuddyResourceQuota,
+} from "./codebuddy-auth";
 
 
 /**
@@ -303,14 +308,6 @@ export class CodeBuddyProvider extends BaseProvider {
       // We aggregate the stream into a single ChatCompletionResponse for the client.
       const response = await this.makeRequest(tokens, request, true);
 
-      if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired, re-login required" };
-      }
-
-      if (response.status === 429) {
-        return { success: false, error: "Rate limited / quota exhausted", quotaExhausted: true };
-      }
-
       if (!response.ok) {
         const errText = await response.text();
         // Detect Chinese content moderation error and translate
@@ -320,7 +317,14 @@ export class CodeBuddyProvider extends BaseProvider {
             error: "Content moderation: Your input was flagged as potentially sensitive. Please rephrase your message."
           };
         }
-        return { success: false, error: `CodeBuddy API error (${response.status}): ${errText}` };
+        const classified = classifyCodeBuddyHttpFailure(response.status, errText, "CodeBuddy");
+        return {
+          success: false,
+          error: classified.sessionExpired
+            ? "Session expired, re-login required"
+            : classified.error,
+          quotaExhausted: classified.quotaExhausted,
+        };
       }
 
       // Aggregate stream into a single response
@@ -360,14 +364,6 @@ export class CodeBuddyProvider extends BaseProvider {
     try {
       const response = await this.makeRequest(tokens, request, true);
 
-      if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired" };
-      }
-
-      if (response.status === 429) {
-        return { success: false, error: "Rate limited", quotaExhausted: true };
-      }
-
       if (!response.ok) {
         const errText = await response.text();
         // Detect Chinese content moderation error and translate
@@ -377,7 +373,12 @@ export class CodeBuddyProvider extends BaseProvider {
             error: "Content moderation: Your input was flagged as potentially sensitive. Please rephrase your message."
           };
         }
-        return { success: false, error: `CodeBuddy API error (${response.status}): ${errText}` };
+        const classified = classifyCodeBuddyHttpFailure(response.status, errText, "CodeBuddy");
+        return {
+          success: false,
+          error: classified.sessionExpired ? "Session expired" : classified.error,
+          quotaExhausted: classified.quotaExhausted,
+        };
       }
 
       return this.createStreamResponse(response, request.model);
@@ -420,7 +421,12 @@ export class CodeBuddyProvider extends BaseProvider {
         return { success: false, error: `API error code ${data.code}` };
       }
 
-      return { success: true, quota: this.parseResourceQuota(data) };
+      const parsed = this.parseResourceQuota(data);
+      if (parsed.ambiguous) {
+        // TotalDosage=0 + empty Accounts is a flaky billing payload, not real zero.
+        return { success: false, error: "ambiguous billing capacity payload" };
+      }
+      return { success: true, quota: parsed };
     } catch (error) {
       return {
         success: false,
@@ -564,7 +570,10 @@ export class CodeBuddyProvider extends BaseProvider {
     if (json) headers["Content-Type"] = "application/json";
 
     const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+      applyCodeBuddyUserIdHeader(headers, apiKey);
+    }
     if (tokens.web_cookie) headers.Cookie = tokens.web_cookie;
     else if (tokens.cookies) headers.Cookie = tokens.cookies;
     if (tokens.csrf_token) headers["X-CSRF-Token"] = tokens.csrf_token;
@@ -592,7 +601,10 @@ export class CodeBuddyProvider extends BaseProvider {
       "X-Requested-With": "XMLHttpRequest",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      applyCodeBuddyUserIdHeader(headers, apiKey);
+    }
 
     return this.fetchWithTimeout(`${this.baseUrl}/v2/billing/meter/get-user-resource`, {
       method: "POST",
@@ -601,24 +613,8 @@ export class CodeBuddyProvider extends BaseProvider {
     }, config.providerQuotaTimeoutMs);
   }
 
-  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number } {
-    const responseData = data.data?.Response?.Data || {};
-    const totalDosage = Number(responseData.TotalDosage || 0);
-    const resourceAccounts = Array.isArray(responseData.Accounts) ? responseData.Accounts : [];
-    let totalRemain = 0;
-    let totalUsed = 0;
-    let totalSize = 0;
-
-    for (const acct of resourceAccounts) {
-      totalRemain += Number(acct.CapacityRemain || 0);
-      totalUsed += Number(acct.CapacityUsed || 0);
-      totalSize += Number(acct.CapacitySize || 0);
-    }
-
-    const limit = totalSize || totalDosage || totalRemain + totalUsed;
-    const remaining = totalRemain;
-    const used = totalUsed || Math.max(0, limit - remaining);
-    return { limit, remaining, used };
+  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number; ambiguous?: boolean } {
+    return parseCodeBuddyResourceQuota(data);
   }
 
   private async makeRequest(
@@ -644,6 +640,8 @@ export class CodeBuddyProvider extends BaseProvider {
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
       headers["X-Api-Key"] = apiKey;
+      // CLI 2.124.0 still sends X-User-Id; prefer JWT sub when token is JWT.
+      applyCodeBuddyUserIdHeader(headers, apiKey);
     }
 
     // Use cookies if available

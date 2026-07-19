@@ -9,6 +9,11 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import {
+  applyCodeBuddyUserIdHeader,
+  classifyCodeBuddyHttpFailure,
+  parseCodeBuddyResourceQuota,
+} from "./codebuddy-auth";
 
 interface CodeBuddyChinaTokens {
   api_key?: string;
@@ -108,7 +113,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   }
 
   private buildHeaders(apiKey: string, stream = false): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       "Accept": stream ? "text/event-stream, application/json, */*" : "application/json, text/plain, */*",
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
@@ -119,6 +124,8 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       "Authorization": `Bearer ${apiKey}`,
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
+    applyCodeBuddyUserIdHeader(headers, apiKey);
+    return headers;
   }
 
   /**
@@ -407,15 +414,16 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       // Always stream — CodeBuddy China doesn't support non-stream
       const response = await this.makeRequest(apiKey, request, true);
 
-      if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired, re-login required" };
-      }
-      if (response.status === 429) {
-        return { success: false, error: "Rate limited / quota exhausted", quotaExhausted: true };
-      }
       if (!response.ok) {
         const errText = await response.text();
-        return { success: false, error: `CodeBuddy China API error (${response.status}): ${errText}` };
+        const classified = classifyCodeBuddyHttpFailure(response.status, errText, "CodeBuddy China");
+        return {
+          success: false,
+          error: classified.sessionExpired
+            ? "Session expired, re-login required"
+            : classified.error,
+          quotaExhausted: classified.quotaExhausted,
+        };
       }
 
       const data = await this.aggregateStreamResponse(response, request.model);
@@ -452,15 +460,14 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     try {
       const response = await this.makeRequest(apiKey, request, true);
 
-      if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired" };
-      }
-      if (response.status === 429) {
-        return { success: false, error: "Rate limited", quotaExhausted: true };
-      }
       if (!response.ok) {
         const errText = await response.text();
-        return { success: false, error: `CodeBuddy China API error (${response.status}): ${errText}` };
+        const classified = classifyCodeBuddyHttpFailure(response.status, errText, "CodeBuddy China");
+        return {
+          success: false,
+          error: classified.sessionExpired ? "Session expired" : classified.error,
+          quotaExhausted: classified.quotaExhausted,
+        };
       }
 
       return this.createStreamResponse(response, request.model);
@@ -503,7 +510,11 @@ export class CodeBuddyChinaProvider extends BaseProvider {
         return { success: false, error: `API error code ${data.code}` };
       }
 
-      return { success: true, quota: this.parseResourceQuota(data) };
+      const parsed = this.parseResourceQuota(data);
+      if (parsed.ambiguous) {
+        return { success: false, error: "ambiguous billing capacity payload" };
+      }
+      return { success: true, quota: parsed };
     } catch (error) {
       return {
         success: false,
@@ -650,7 +661,10 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       "X-Requested-With": "XMLHttpRequest",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+      applyCodeBuddyUserIdHeader(headers, apiKey);
+    }
 
     return this.fetchWithTimeout(`${this.baseUrl}/v2/billing/meter/get-user-resource`, {
       method: "POST",
@@ -659,24 +673,8 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     }, config.providerQuotaTimeoutMs);
   }
 
-  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number } {
-    const responseData = data.data?.Response?.Data || {};
-    const totalDosage = Number(responseData.TotalDosage || 0);
-    const resourceAccounts = Array.isArray(responseData.Accounts) ? responseData.Accounts : [];
-    let totalRemain = 0;
-    let totalUsed = 0;
-    let totalSize = 0;
-
-    for (const acct of resourceAccounts) {
-      totalRemain += Number(acct.CapacityRemain || 0);
-      totalUsed += Number(acct.CapacityUsed || 0);
-      totalSize += Number(acct.CapacitySize || 0);
-    }
-
-    const limit = totalSize || totalDosage || totalRemain + totalUsed;
-    const remaining = totalRemain;
-    const used = totalUsed || Math.max(0, limit - remaining);
-    return { limit, remaining, used };
+  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number; ambiguous?: boolean } {
+    return parseCodeBuddyResourceQuota(data);
   }
 
   private async makeRequest(

@@ -94,8 +94,14 @@ class AccountPool {
   /**
    * Get the next available account for a provider using configured method.
    */
-  async getNextAccount(provider: ProviderName): Promise<Account | null> {
-    const activeAccounts = await this.getActiveAccounts(provider);
+  async getNextAccount(
+    provider: ProviderName,
+    options: { excludeAccountIds?: Set<number> } = {},
+  ): Promise<Account | null> {
+    let activeAccounts = await this.getActiveAccounts(provider);
+    if (options.excludeAccountIds?.size) {
+      activeAccounts = activeAccounts.filter((a) => !options.excludeAccountIds!.has(a.id));
+    }
 
     if (activeAccounts.length === 0) {
       return null;
@@ -359,7 +365,9 @@ class AccountPool {
       return { account, provider: "byok" };
     }
 
-    const account = await this.getNextAccount(provider);
+    const account = await this.getNextAccount(provider, {
+      excludeAccountIds: options.excludeAccountIds,
+    });
     if (!account) return null;
 
     return { account, provider };

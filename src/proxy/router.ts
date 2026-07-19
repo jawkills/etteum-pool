@@ -135,22 +135,32 @@ export async function routeRequest(
 
   const maxRetries = Math.max(1, provider.maxAccountRetries ?? 3);
   let lastError = "";
-  const attemptedByokAccountIds = new Set<number>();
+  // forceNew cascade: never re-pick the same account within one request.
+  // BYOK already excluded; codebuddy(+china) needs it for credit-death rotate
+  // (community rotator hotfix: sequential retries must not reuse dead JWT/key).
+  const attemptedAccountIds = new Set<number>();
+  const excludeOnRetry =
+    providerName === "byok" ||
+    providerName === "codebuddy" ||
+    providerName === "codebuddy-china";
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     // BYOK uses prefix-based account lookup (not the generic pool),
     // so it can also find error-status accounts and retry them.
     const account = providerName === "byok"
       ? (await pool.getAccountForModel(compressedRequest.model, {
-          excludeAccountIds: attemptedByokAccountIds,
+          excludeAccountIds: attemptedAccountIds,
         }))?.account ?? null
-      : await pool.getNextAccount(providerName);
+      : await pool.getNextAccount(
+          providerName,
+          excludeOnRetry ? { excludeAccountIds: attemptedAccountIds } : {},
+        );
     if (!account) {
       throw new Error(
         `No active accounts available for provider: ${providerName}`
       );
     }
-    if (providerName === "byok") attemptedByokAccountIds.add(account.id);
+    if (excludeOnRetry) attemptedAccountIds.add(account.id);
 
     const startTime = Date.now();
     let tracked = false;
