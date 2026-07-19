@@ -2,6 +2,12 @@ import type { ChatCompletionRequest } from "../providers/base";
 
 export type AnthropicContentBlock =
   | { type: "text"; text: string }
+  | {
+      type: "image";
+      source:
+        | { type: "base64"; media_type: string; data: string }
+        | { type: "url"; url: string };
+    }
   | { type: string; [key: string]: unknown };
 
 export interface AnthropicMessage {
@@ -32,6 +38,35 @@ function contentToText(content: string | AnthropicContentBlock[] | undefined): s
     .join("\n");
 }
 
+/**
+ * Convert an Anthropic image block to the OpenAI multimodal `image_url` shape
+ * that internal providers (kiro, codebuddy, grok, ...) pass upstream.
+ *
+ * Anthropic supports two source kinds:
+ *   - { type: "base64", media_type, data }
+ *   - { type: "url", url }
+ *
+ * Both become { type: "image_url", image_url: { url } } where url is either
+ * the raw HTTP URL or a `data:<media>;base64,<data>` payload.
+ *
+ * Returns null if the block is missing usable image data — the caller drops it.
+ */
+function anthropicImageToOpenAI(block: AnthropicContentBlock): any | null {
+  const source = (block as any).source;
+  if (!source || typeof source !== "object") return null;
+  if (source.type === "url" && typeof source.url === "string" && source.url) {
+    return { type: "image_url", image_url: { url: source.url } };
+  }
+  if (source.type === "base64" && typeof source.data === "string" && source.data) {
+    const mediaType = source.media_type || "image/png";
+    return {
+      type: "image_url",
+      image_url: { url: `data:${mediaType};base64,${source.data}` },
+    };
+  }
+  return null;
+}
+
 function anthropicContentToOpenAI(content: string | AnthropicContentBlock[] | undefined): string | any[] {
   if (!Array.isArray(content)) return content || "";
   return content.map((block) => {
@@ -45,8 +80,15 @@ function anthropicContentToOpenAI(content: string | AnthropicContentBlock[] | un
     }
     if (block.type === "tool_use") return block;
     if (block.type === "text") return { type: "text", text: block.text || "" };
+    // Anthropic vision: convert to OpenAI image_url before handing off to
+    // providers. Without this, the raw { type: "image", source: {...} } block
+    // is passed through and upstream returns "Empty content block".
+    if (block.type === "image") {
+      const converted = anthropicImageToOpenAI(block);
+      if (converted) return converted;
+    }
     return block;
-  });
+  }).filter((block) => block !== null && block !== undefined);
 }
 
 /**
