@@ -140,9 +140,11 @@ export class GrokCliProvider extends BaseProvider {
       object: "model" as const,
       created: Date.now(),
       owned_by: "grok-cli",
-      context_window: 256000,
-      max_output: 16000,
-      thinking: id !== "gcli/grok-4.5",
+      // Official default TUI model is grok-build; 4.5 effort aliases still listed.
+      context_window: id === "gcli/grok-build" ? 500_000 : 256_000,
+      max_output: id === "gcli/grok-build" ? 64_000 : 16_000,
+      // Effort aliases imply thinking; plain 4.5 / build leave thinking optional.
+      thinking: id.includes("-high") || id.includes("-medium") || id.includes("-low"),
       vision: true,
       creditUnit: "token" as const,
       creditRate: 1,
@@ -171,6 +173,9 @@ export class GrokCliProvider extends BaseProvider {
     const m = model.trim().toLowerCase();
     const exact = this.supportedModels.find((item) => item.id.toLowerCase() === m);
     if (exact) return exact;
+    if (m === "grok-build" || m === "gcli/grok-build" || m === "gb") {
+      return this.supportedModels.find((item) => item.id === "gcli/grok-build");
+    }
     if (m === "grok-4.5" || m === "gcli/grok-4.5") {
       return this.supportedModels.find((item) => item.id === "gcli/grok-4.5");
     }

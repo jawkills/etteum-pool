@@ -105,12 +105,14 @@ describe("normalizeGrokCliCpa", () => {
 
 describe("grokCliOwnsModel", () => {
   test("owns gcli catalog ids", () => {
+    expect(grokCliOwnsModel("gcli/grok-build")).toBe(true);
     expect(grokCliOwnsModel("gcli/grok-4.5")).toBe(true);
     expect(grokCliOwnsModel("gcli/grok-4.5-high")).toBe(true);
     expect(grokCliOwnsModel("gcli/grok-4.5-medium")).toBe(true);
     expect(grokCliOwnsModel("gcli/grok-4.5-low")).toBe(true);
   });
-  test("owns bare grok-4.5 compat", () => {
+  test("owns bare grok-build and grok-4.5 compat", () => {
+    expect(grokCliOwnsModel("grok-build")).toBe(true);
     expect(grokCliOwnsModel("grok-4.5")).toBe(true);
   });
   test("owns prefixed grok-cli-grok-4.5", () => {
@@ -124,18 +126,25 @@ describe("grokCliOwnsModel", () => {
 
 describe("parseGrokCliModelId", () => {
   test("maps gcli effort aliases to grok-4.5 + effort", () => {
-    expect(parseGrokCliModelId("gcli/grok-4.5")).toEqual({
-      upstream: "grok-4.5",
-      effort: null,
-      bare: "grok-4.5",
-    });
+    const base = parseGrokCliModelId("gcli/grok-4.5");
+    expect(base.upstream).toBe("grok-4.5");
+    expect(base.effort).toBeNull();
+    expect(base.allowReasoningEffort).toBe(true);
     expect(parseGrokCliModelId("gcli/grok-4.5-high").effort).toBe("high");
     expect(parseGrokCliModelId("gcli/grok-4.5-medium").effort).toBe("medium");
     expect(parseGrokCliModelId("gcli/grok-4.5-low").effort).toBe("low");
     expect(resolveGrokCliUpstreamModel("gcli/grok-4.5-high")).toBe("grok-4.5");
   });
-  test("catalog has 4 models", () => {
-    expect(GROK_CLI_CATALOG_IDS).toHaveLength(4);
+  test("maps grok-build without reasoning effort", () => {
+    const p = parseGrokCliModelId("gcli/grok-build");
+    expect(p.upstream).toBe("grok-build");
+    expect(p.effort).toBeNull();
+    expect(p.allowReasoningEffort).toBe(false);
+    expect(resolveGrokCliUpstreamModel("grok-build")).toBe("grok-build");
+  });
+  test("catalog includes grok-build + 4.5 effort aliases", () => {
+    expect(GROK_CLI_CATALOG_IDS).toContain("gcli/grok-build");
+    expect(GROK_CLI_CATALOG_IDS).toHaveLength(5);
   });
 });
 
@@ -155,9 +164,20 @@ describe("buildGrokCliHeaders", () => {
     expect(h["x-xai-token-auth"]).toBe("xai-grok-cli");
     expect(h["X-XAI-Token-Auth"]).toBeUndefined();
     expect(h["x-grok-model-override"]).toBe("grok-4.5");
+    expect(h["x-grok-client-identifier"]).toBe("grok-shell");
+    expect(h["User-Agent"]).toMatch(/^grok-shell\//);
+    expect(h["x-grok-req-id"]).toBeTruthy();
+    expect(h["x-grok-session-id"]).toBeTruthy();
+    expect(h["x-grok-conv-id"]).toBeTruthy();
+    expect(h["x-grok-agent-id"]).toBeTruthy();
     expect(h["x-email"]).toBe("a@x.com");
     expect(h["x-teamid"]).toBe("t1");
     expect(h["x-userid"]).toBe("u1");
+    expect(h["x-grok-user-id"]).toBe("u1");
+  });
+  test("model override for grok-build", () => {
+    const h = buildGrokCliHeaders({ access_token: "tok" }, "gcli/grok-build");
+    expect(h["x-grok-model-override"]).toBe("grok-build");
   });
 });
 

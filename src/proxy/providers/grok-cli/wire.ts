@@ -128,7 +128,13 @@ export async function grokCliUpstreamChat(
     model,
     stream: !!req.stream,
   };
-  if (parsed.effort && body.reasoning_effort == null && (body as any).reasoningEffort == null) {
+  // Official grok-build rejects reasoningEffort; only attach for 4.5 family.
+  if (
+    parsed.allowReasoningEffort &&
+    parsed.effort &&
+    body.reasoning_effort == null &&
+    (body as any).reasoningEffort == null
+  ) {
     body.reasoning_effort = parsed.effort;
   }
 
@@ -136,7 +142,7 @@ export async function grokCliUpstreamChat(
     `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
     {
       method: "POST",
-      headers: buildGrokCliHeaders({ ...tokens, email: account.email }, model),
+      headers: buildGrokCliHeaders({ ...tokens, email: account.email }, req.model || model),
       body: JSON.stringify(body),
     },
     config.providerRequestTimeoutMs
