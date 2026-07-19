@@ -136,8 +136,14 @@ export abstract class BaseProvider {
   abstract name: string;
   abstract supportedModels: ModelInfo[];
 
-  /** Account attempts in routeRequest before giving up. Default 3. */
-  maxAccountRetries = 3;
+  /**
+   * Account attempts in routeRequest before giving up. Default 3.
+   * Getter (not a field) so subclasses can override with live config without
+   * being shadowed by the base instance property.
+   */
+  get maxAccountRetries(): number {
+    return 3;
+  }
 
   abstract chatCompletion(
     account: Account,

@@ -5,6 +5,8 @@ import {
   buildGrokCliHeaders,
   classifyGrokCliError,
   isGrokCliDeadError,
+  classifyGrokAuthFailure,
+  formatGrokAuthFailure,
   parseGrokCliModelId,
   resolveGrokCliUpstreamModel,
   extractGrokCliImageGenerationResults,
@@ -163,6 +165,33 @@ describe("isGrokCliDeadError", () => {
     // The permanent latch string itself must only match real IdP death.
     expect(isPermanentRevocation("Grok CLI dead: invalid_grant")).toBe(true);
     expect(isPermanentRevocation(msg)).toBe(false);
+  });
+});
+
+describe("formatGrokAuthFailure", () => {
+  test("permanent IdP death gets latch prefix + deadAccount", () => {
+    const out = formatGrokAuthFailure('invalid_grant: {"error":"invalid_grant"}');
+    expect(out.kind).toBe("permanent");
+    expect(out.permanent).toBe(true);
+    expect(out.deadAccount).toBe(true);
+    expect(out.error.toLowerCase()).toContain("grok cli dead");
+    expect(classifyGrokAuthFailure(out.error)).toBe("permanent");
+  });
+
+  test("missing credentials stay plain (no latch prefix)", () => {
+    const out = formatGrokAuthFailure("No access_token for grok-cli account");
+    expect(out.kind).toBe("missing");
+    expect(out.permanent).toBe(false);
+    expect(out.deadAccount).toBe(true);
+    expect(out.error).toBe("No access_token for grok-cli account");
+    expect(out.error.toLowerCase()).not.toContain("grok cli dead");
+  });
+
+  test("generic auth is non-dead with auth prefix", () => {
+    const out = formatGrokAuthFailure("unauthorized");
+    expect(out.kind).toBe("auth");
+    expect(out.deadAccount).toBe(false);
+    expect(out.error).toBe("Grok CLI auth: unauthorized");
   });
 });
 

@@ -83,6 +83,13 @@ function processStatusLabel(process: ProcessLog) {
   return statusLabel(process.latest.type);
 }
 
+/** Auto-login bot path only — grok farm/reauth use Refresh/Reauth instead. */
+function isAutoLoginRetryable(log: AuthLog): boolean {
+  if (log.provider === "grok-cli") return false;
+  if (log.type?.startsWith("grok_farm_") || log.type?.startsWith("grok_reauth_")) return false;
+  return true;
+}
+
 function providerLabel(provider?: string) {
   if (!provider) return "-";
   if (provider === "codebuddy") return "CodeBuddy";
@@ -305,16 +312,10 @@ export default function BotLogs() {
   }
 
   async function handleRetryAll() {
-    // Skip grok farm/reauth rows — they have no auto-login-bot path.
     const ids = Array.from(
       new Set(
         failedAccounts
-          .filter(
-            (log) =>
-              log.provider !== "grok-cli" &&
-              !log.type?.startsWith("grok_farm_") &&
-              !log.type?.startsWith("grok_reauth_"),
-          )
+          .filter(isAutoLoginRetryable)
           .map((log) => log.accountId)
           .filter((id): id is number => Boolean(id)),
       ),
@@ -329,12 +330,7 @@ export default function BotLogs() {
       Array.from(
         new Set(
           failedAccounts
-            .filter(
-              (log) =>
-                log.provider !== "grok-cli" &&
-                !log.type?.startsWith("grok_farm_") &&
-                !log.type?.startsWith("grok_reauth_"),
-            )
+            .filter(isAutoLoginRetryable)
             .map((log) => log.accountId)
             .filter((id): id is number => Boolean(id)),
         ),
@@ -400,13 +396,12 @@ export default function BotLogs() {
                   </div>
                   <div className="text-xs text-[var(--muted-foreground)] md:text-sm">{providerLabel(log.provider)}</div>
                   <div className="col-span-2 truncate text-xs text-[var(--error)] md:col-span-1" title={log.error || log.message}>{log.error || log.message}</div>
-                  {/* grok farm/reauth failures are not auto-login-bot retries */}
-                  {log.provider === "grok-cli" || log.type?.startsWith("grok_farm_") || log.type?.startsWith("grok_reauth_") ? (
-                    <span className="text-xs text-[var(--muted-foreground)] self-center">Use Refresh/Reauth</span>
-                  ) : (
+                  {isAutoLoginRetryable(log) ? (
                     <Button variant="ghost" size="sm" onClick={() => handleRetry(log.accountId)} disabled={!log.accountId}>
                       <RotateCcw className="mr-1 h-3 w-3" /> Retry
                     </Button>
+                  ) : (
+                    <span className="text-xs text-[var(--muted-foreground)] self-center">Use Refresh/Reauth</span>
                   )}
                 </div>
               ))}

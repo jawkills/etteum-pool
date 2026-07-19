@@ -14,7 +14,10 @@ import {
   parseExpiresAtSec,
 } from "../account-health";
 import type { ProveMode, SessionProveResult } from "../session-prove";
-import { getCachedGrokCliRuntimeSettings } from "./grok-cli-settings";
+import {
+  DEFAULT_GROK_CLI_REFRESH_LEAD_SEC,
+  getCachedGrokCliRuntimeSettings,
+} from "./grok-cli-settings";
 
 export const GROK_CLI_TOKEN_LIMIT = 2_000_000;
 export const GROK_CLI_UPSTREAM_BASE =
@@ -28,8 +31,8 @@ export const GROK_CLI_CLIENT_VERSION =
   process.env.GROK_CLI_CLIENT_VERSION || "0.2.99";
 export const GROK_CLI_CLIENT_IDENTIFIER =
   process.env.GROK_CLI_CLIENT_IDENTIFIER || "grok-pager";
-/** Proactive refresh when access token remaining lifetime below this (seconds). */
-export const GROK_CLI_REFRESH_LEAD_SEC = Number(process.env.GROK_CLI_REFRESH_LEAD_SEC) || 45 * 60;
+/** Default proactive-refresh lead (seconds). Runtime may override via settings cache. */
+export const GROK_CLI_REFRESH_LEAD_SEC = DEFAULT_GROK_CLI_REFRESH_LEAD_SEC;
 /** Image generate/edit via Responses API needs a longer budget than chat. */
 export const GROK_CLI_IMAGE_TIMEOUT_MS =
   Number(process.env.GROK_CLI_IMAGE_TIMEOUT_MS) || 180_000;
@@ -266,6 +269,21 @@ export function isGrokCliPermanentRevocation(error?: string | null): boolean {
   return isPermanentRevocation(error);
 }
 
+export type GrokAuthClass = "permanent" | "missing" | "auth";
+
+/**
+ * Single classifier for refresh/auth failures.
+ * permanent → WarmUp latch / reauth-or-farm
+ * missing  → unusable for traffic, still reauthable (no "Grok CLI dead:" latch)
+ * auth     → transient / generic auth error
+ */
+export function classifyGrokAuthFailure(error?: string | null): GrokAuthClass {
+  if (isPermanentRevocation(error)) return "permanent";
+  if (isMissingCredentialMessage(error)) return "missing";
+  if (isDeadErrorMessage(error)) return "missing"; // belt: dead union without permanent
+  return "auth";
+}
+
 /**
  * Prefix permanent IdP death only. Never wrap missing-credential messages —
  * "Grok CLI dead:" is itself an isPermanentRevocation match, so formatting
@@ -278,6 +296,37 @@ function formatGrokCliDeadError(detail: string): string {
   // Preserve missing-credential wording so isMissingCredentialMessage still matches.
   if (isMissingCredentialMessage(cleaned)) return cleaned;
   return `Grok CLI dead: ${cleaned}`;
+}
+
+/**
+ * One place for error text + deadAccount flag used by ensure/require/recover.
+ * deadAccount=true means "do not select for traffic"; permanent only for IdP death.
+ */
+export function formatGrokAuthFailure(error?: string | null): {
+  error: string;
+  deadAccount: boolean;
+  permanent: boolean;
+  kind: GrokAuthClass;
+} {
+  const raw = (error || "").replace(/\s+/g, " ").trim() || "refresh failed";
+  const kind = classifyGrokAuthFailure(raw);
+  if (kind === "permanent") {
+    return {
+      error: formatGrokCliDeadError(raw),
+      deadAccount: true,
+      permanent: true,
+      kind,
+    };
+  }
+  if (kind === "missing") {
+    return { error: raw, deadAccount: true, permanent: false, kind };
+  }
+  return {
+    error: raw.startsWith("Grok CLI auth:") ? raw : `Grok CLI auth: ${raw}`,
+    deadAccount: false,
+    permanent: false,
+    kind,
+  };
 }
 
 /** Parse expires_at from unix sec/ms or ISO-8601 string. */
@@ -302,11 +351,14 @@ export class GrokCliProvider extends BaseProvider {
   name = "grok-cli";
   override nativeFormat: "openai" | "anthropic" = "openai";
   override isFallback = false;
+
   /**
-   * Large farms often have many revoked tokens still marked active.
-   * Updated from settings key grok_cli_max_account_retries (see applyGrokCliRuntimeSettings).
+   * Live read from settings cache (single source of truth).
+   * Key: grok_cli_max_account_retries. No dual-store apply path.
    */
-  override maxAccountRetries = getCachedGrokCliRuntimeSettings().maxAccountRetries;
+  override get maxAccountRetries(): number {
+    return getCachedGrokCliRuntimeSettings().maxAccountRetries;
+  }
 
   private refreshLocks = new Map<number, Promise<RefreshResult>>();
 
@@ -383,27 +435,22 @@ export class GrokCliProvider extends BaseProvider {
     const tokens = this.getTokens(account);
     if (!tokens?.access_token) {
       // Unusable for traffic, but not permanent IdP death — keep plain wording.
+      const formatted = formatGrokAuthFailure("No access_token for grok-cli account");
       return {
         account,
-        error: "No access_token for grok-cli account",
-        dead: true,
+        error: formatted.error,
+        dead: formatted.deadAccount,
       };
     }
     if (!grokCliNeedsProactiveRefresh(tokens)) return { account };
 
     const refreshed = await this.refreshToken(account);
     if (!refreshed.success || !refreshed.tokens) {
-      const err = refreshed.error || "refresh failed";
-      const permanent = isPermanentRevocation(err);
-      const dead = isGrokCliDeadError(err);
+      const formatted = formatGrokAuthFailure(refreshed.error || "refresh failed");
       return {
         account,
-        error: permanent
-          ? formatGrokCliDeadError(err)
-          : dead
-            ? err
-            : `Grok CLI auth: ${err}`,
-        dead,
+        error: formatted.error,
+        dead: formatted.deadAccount,
       };
     }
     return {
@@ -422,11 +469,10 @@ export class GrokCliProvider extends BaseProvider {
   > {
     const fresh = await this.ensureFreshTokens(account);
     if (fresh.dead || (fresh.error && isGrokCliDeadError(fresh.error))) {
-      const err = fresh.error || "refresh token revoked";
+      const formatted = formatGrokAuthFailure(fresh.error || "refresh token revoked");
       return {
         ok: false,
-        // Permanent IdP only gets the "Grok CLI dead:" latch prefix.
-        error: isPermanentRevocation(err) ? formatGrokCliDeadError(err) : err,
+        error: formatted.error,
         deadAccount: true,
       };
     }
@@ -491,17 +537,11 @@ export class GrokCliProvider extends BaseProvider {
         tokensJson: refreshed.tokens,
       };
     }
-    const err = refreshed.error || "refresh failed";
-    const permanent = isPermanentRevocation(err);
-    const dead = isGrokCliDeadError(err);
+    const formatted = formatGrokAuthFailure(refreshed.error || "refresh failed");
     return {
       kind: "auth_failed",
-      error: permanent
-        ? formatGrokCliDeadError(err)
-        : dead
-          ? err
-          : `Grok CLI auth: ${err}`,
-      deadAccount: dead,
+      error: formatted.error,
+      deadAccount: formatted.deadAccount,
     };
   }
 
@@ -980,23 +1020,22 @@ export class GrokCliProvider extends BaseProvider {
 
     const refreshed = await this.refreshToken(account);
     if (!refreshed.success || !refreshed.tokens) {
-      const err = refreshed.error || "refresh failed";
-      // Permanent IdP first — isGrokCliDeadError also matches missing-creds,
-      // so do NOT fold them into session_revoked (that would latch WarmUp).
-      if (isPermanentRevocation(err)) {
+      const formatted = formatGrokAuthFailure(refreshed.error || "refresh failed");
+      // permanent → session_revoked (WarmUp latch); missing stays missing_tokens.
+      if (formatted.kind === "permanent") {
         return {
           ok: false,
           kind: "session_revoked",
-          error: formatGrokCliDeadError(err),
+          error: formatted.error,
           refreshed: false,
           healthKind: "session_expired",
         };
       }
-      if (isMissingCredentialMessage(err)) {
+      if (formatted.kind === "missing") {
         return {
           ok: false,
           kind: "missing_tokens",
-          error: err,
+          error: formatted.error,
           refreshed: false,
           healthKind: "missing_tokens",
         };
@@ -1004,7 +1043,7 @@ export class GrokCliProvider extends BaseProvider {
       return {
         ok: false,
         kind: "auth_error",
-        error: err,
+        error: formatted.error,
         refreshed: false,
         healthKind: "auth_error",
       };
@@ -1088,13 +1127,4 @@ export class GrokCliProvider extends BaseProvider {
 }
 
 export const grokCliProvider = new GrokCliProvider();
-
-/** Apply cached/loaded runtime settings onto the singleton provider. */
-export function applyGrokCliRuntimeSettings(settings?: {
-  refreshLeadSec: number;
-  maxAccountRetries: number;
-}): void {
-  const s = settings ?? getCachedGrokCliRuntimeSettings();
-  grokCliProvider.maxAccountRetries = s.maxAccountRetries;
-}
 
