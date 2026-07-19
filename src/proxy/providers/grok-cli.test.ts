@@ -14,8 +14,11 @@ import {
   collectGrokCliImageRefs,
   normalizeGrokCliUsage,
   stripGrokCliDataUrlPrefix,
+  parseGrokCliRateLimitHeaders,
+  parseGrokCliExhaustedBody,
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
+  GROK_CLI_CREDIT_SOFT_ERROR,
 } from "./grok-cli";
 
 describe("normalizeGrokCliCpa", () => {
@@ -130,6 +133,29 @@ describe("classifyGrokCliError", () => {
   test("403 spending limit => exhausted", () => {
     expect(classifyGrokCliError(403, "credits are exhausted")).toBe("exhausted");
   });
+  test("402 personal-team-blocked:spending-limit => exhausted", () => {
+    // Live center: free/personal team blocked — not 403, hyphenated code.
+    const body = JSON.stringify({
+      code: "personal-team-blocked:spending-limit",
+      error:
+        "You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage",
+    });
+    expect(classifyGrokCliError(402, body)).toBe("exhausted");
+  });
+  test("402 alone (no body) => exhausted", () => {
+    expect(classifyGrokCliError(402, "")).toBe("exhausted");
+  });
+  test("429 free-usage-exhausted body => exhausted", () => {
+    expect(
+      classifyGrokCliError(
+        429,
+        "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
+      )
+    ).toBe("exhausted");
+  });
+  test("run out of credits text => exhausted", () => {
+    expect(classifyGrokCliError(400, "You have run out of credits")).toBe("exhausted");
+  });
   test("401 revoked => dead", () => {
     expect(classifyGrokCliError(401, "invalid_grant revoked")).toBe("dead");
   });
@@ -138,6 +164,48 @@ describe("classifyGrokCliError", () => {
   });
   test("other => null", () => {
     expect(classifyGrokCliError(500, "boom")).toBe(null);
+  });
+});
+
+describe("parseGrokCliRateLimitHeaders", () => {
+  test("reads x-ratelimit token/request counters", () => {
+    const h = new Headers({
+      "x-ratelimit-limit-tokens": "1000000",
+      "x-ratelimit-remaining-tokens": "420000",
+      "x-ratelimit-limit-requests": "100",
+      "x-ratelimit-remaining-requests": "77",
+    });
+    expect(parseGrokCliRateLimitHeaders(h)).toEqual({
+      limitTokens: 1_000_000,
+      remainingTokens: 420_000,
+      limitRequests: 100,
+      remainingRequests: 77,
+    });
+  });
+  test("tolerates plain object / missing", () => {
+    expect(parseGrokCliRateLimitHeaders({})).toEqual({});
+    expect(
+      parseGrokCliRateLimitHeaders({ "X-Ratelimit-Remaining-Tokens": "12" })
+    ).toEqual({ remainingTokens: 12 });
+  });
+});
+
+describe("parseGrokCliExhaustedBody", () => {
+  test("parses tokens (actual/limit) from free-usage body", () => {
+    expect(
+      parseGrokCliExhaustedBody(
+        "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
+      )
+    ).toEqual({ actual: 1_053_503, limit: 1_000_000, remaining: 0 });
+  });
+  test("null when no match", () => {
+    expect(parseGrokCliExhaustedBody("boom")).toBeNull();
+  });
+});
+
+describe("GROK_CLI_CREDIT_SOFT_ERROR", () => {
+  test("stable soft string for clients", () => {
+    expect(GROK_CLI_CREDIT_SOFT_ERROR).toMatch(/credits exhausted/i);
   });
 });
 

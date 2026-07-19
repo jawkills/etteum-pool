@@ -232,25 +232,174 @@ export function buildGrokCliHeaders(
 
 export type GrokCliErrorKind = "exhausted" | "dead" | "auth" | null;
 
+/** Soft client-facing string — do not dump multi-line center bodies for credit death. */
+export const GROK_CLI_CREDIT_SOFT_ERROR = "Grok CLI credits exhausted";
+
+/**
+ * Classify center chat/image failures.
+ * Live free/personal path returns HTTP 402 + code personal-team-blocked:spending-limit
+ * (hyphenated, not "spending limit") and "run out of credits" — not only 403.
+ */
 export function classifyGrokCliError(status: number, body: string): GrokCliErrorKind {
   const low = (body || "").toLowerCase();
+  // Prefer dead if body clearly says revoked even with 403-ish wording
+  if (low.includes("invalid_grant") || low.includes("revoked") || low.includes("unknown refresh")) {
+    if (status === 401 || status === 403) return "dead";
+    if (status !== 402) return "dead";
+  }
   if (
+    status === 402 ||
     status === 403 ||
     low.includes("spending limit") ||
+    low.includes("spending-limit") ||
+    low.includes("personal-team-blocked") ||
     low.includes("credits are exhausted") ||
-    low.includes("quota")
+    low.includes("run out of credits") ||
+    low.includes("free-usage-exhausted") ||
+    low.includes("need a grok subscription") ||
+    (status === 429 && /tokens\s*\(actual\/limit\)|free-usage|quota|credit/i.test(low)) ||
+    (low.includes("quota") && /exhaust|exceed|limit|spent|usage/i.test(low))
   ) {
-    // Prefer dead if body clearly says revoked even with 403-ish wording
-    if (low.includes("invalid_grant") || low.includes("revoked")) return "dead";
     return "exhausted";
   }
   if (status === 401) {
-    if (low.includes("invalid_grant") || low.includes("revoked") || low.includes("unknown refresh")) {
-      return "dead";
-    }
     return "auth";
   }
   if (low.includes("invalid_grant") || low.includes("revoked")) return "dead";
+  return null;
+}
+
+type HeaderLike =
+  | Headers
+  | Record<string, string | string[] | undefined | null>
+  | { get?(name: string): string | null | undefined };
+
+function headerGet(headers: HeaderLike | null | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (typeof (headers as Headers).get === "function") {
+    const v = (headers as Headers).get(name);
+    return v == null ? undefined : String(v);
+  }
+  const rec = headers as Record<string, string | string[] | undefined | null>;
+  const direct = rec[name] ?? rec[name.toLowerCase()] ?? rec[name.toUpperCase()];
+  if (direct == null) {
+    // case-insensitive scan for plain objects
+    const want = name.toLowerCase();
+    for (const [k, v] of Object.entries(rec)) {
+      if (k.toLowerCase() === want) {
+        return Array.isArray(v) ? v[0] : v == null ? undefined : String(v);
+      }
+    }
+    return undefined;
+  }
+  return Array.isArray(direct) ? direct[0] : String(direct);
+}
+
+function headerInt(headers: HeaderLike | null | undefined, name: string): number | undefined {
+  const raw = headerGet(headers, name);
+  if (raw == null || raw === "") return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.trunc(n) : undefined;
+}
+
+export type GrokCliRateLimitSnapshot = {
+  limitTokens?: number;
+  remainingTokens?: number;
+  limitRequests?: number;
+  remainingRequests?: number;
+};
+
+/** Parse cli-chat-proxy x-ratelimit-* headers (center free-window truth). */
+export function parseGrokCliRateLimitHeaders(
+  headers: HeaderLike | null | undefined
+): GrokCliRateLimitSnapshot {
+  const out: GrokCliRateLimitSnapshot = {};
+  const limitTokens = headerInt(headers, "x-ratelimit-limit-tokens");
+  const remainingTokens = headerInt(headers, "x-ratelimit-remaining-tokens");
+  const limitRequests = headerInt(headers, "x-ratelimit-limit-requests");
+  const remainingRequests = headerInt(headers, "x-ratelimit-remaining-requests");
+  if (limitTokens != null) out.limitTokens = limitTokens;
+  if (remainingTokens != null) out.remainingTokens = remainingTokens;
+  if (limitRequests != null) out.limitRequests = limitRequests;
+  if (remainingRequests != null) out.remainingRequests = remainingRequests;
+  return out;
+}
+
+/**
+ * Parse 429 free-usage body: `tokens (actual/limit): 1053503/1000000`.
+ * remaining is max(0, limit - actual) — can be 0 when actual > limit.
+ */
+export function parseGrokCliExhaustedBody(
+  body: string
+): { actual: number; limit: number; remaining: number } | null {
+  const m = /tokens\s*\(actual\/limit\)\s*:\s*(\d+)\s*\/\s*(\d+)/i.exec(body || "");
+  if (!m) return null;
+  const actual = Number(m[1]);
+  const limit = Number(m[2]);
+  if (!Number.isFinite(actual) || !Number.isFinite(limit) || limit <= 0) return null;
+  return { actual, limit, remaining: Math.max(0, limit - actual) };
+}
+
+/** Build quota snapshot from center headers and/or exhausted body. */
+export function quotaFromGrokCliCenterSignals(opts: {
+  headers?: HeaderLike | null;
+  body?: string;
+  status?: number;
+}): {
+  limit: number;
+  remaining: number;
+  used: number;
+  resetAt: null;
+  source: string;
+  exhausted: boolean;
+} | null {
+  const rl = parseGrokCliRateLimitHeaders(opts.headers);
+  const exhaustedBody = parseGrokCliExhaustedBody(opts.body || "");
+  const kind = classifyGrokCliError(opts.status ?? 0, opts.body || "");
+
+  if (exhaustedBody) {
+    return {
+      limit: exhaustedBody.limit,
+      remaining: exhaustedBody.remaining,
+      used: exhaustedBody.actual,
+      resetAt: null,
+      source: "upstream-body",
+      exhausted: true,
+    };
+  }
+
+  if (rl.limitTokens != null || rl.remainingTokens != null) {
+    const limit =
+      rl.limitTokens != null && rl.limitTokens > 0
+        ? rl.limitTokens
+        : GROK_CLI_TOKEN_LIMIT;
+    const remaining =
+      rl.remainingTokens != null
+        ? Math.max(0, rl.remainingTokens)
+        : limit;
+    const used = Math.max(0, limit - remaining);
+    return {
+      limit,
+      remaining,
+      used,
+      resetAt: null,
+      source: "upstream-headers",
+      exhausted: kind === "exhausted" || remaining <= 0,
+    };
+  }
+
+  if (kind === "exhausted") {
+    // 402 spending-limit: center says unusable — don't invent remaining from local 2M.
+    return {
+      limit: GROK_CLI_TOKEN_LIMIT,
+      remaining: 0,
+      used: GROK_CLI_TOKEN_LIMIT,
+      resetAt: null,
+      source: "upstream-exhausted",
+      exhausted: true,
+    };
+  }
+
   return null;
 }
 
@@ -655,7 +804,9 @@ export class GrokCliProvider extends BaseProvider {
     const parsedTokens = this.parsePersistedTokens(persistedTokens);
     if (!response.ok) {
       return this.failImage(
-        `Grok CLI image HTTP ${response.status}: ${text.slice(0, 300)}`,
+        kind === "exhausted"
+          ? GROK_CLI_CREDIT_SOFT_ERROR
+          : `Grok CLI image HTTP ${response.status}: ${text.slice(0, 300)}`,
         {
           quotaExhausted: kind === "exhausted",
           deadAccount: kind === "dead",
@@ -789,7 +940,9 @@ export class GrokCliProvider extends BaseProvider {
     const parsedTokens = this.parsePersistedTokens(persistedTokens);
     if (!response.ok) {
       return this.failChat(
-        `Grok CLI HTTP ${response.status}: ${text.slice(0, 300)}`,
+        kind === "exhausted"
+          ? GROK_CLI_CREDIT_SOFT_ERROR
+          : `Grok CLI HTTP ${response.status}: ${text.slice(0, 300)}`,
         {
           quotaExhausted: kind === "exhausted",
           deadAccount: kind === "dead",
@@ -871,7 +1024,9 @@ export class GrokCliProvider extends BaseProvider {
       const text = await response.text().catch(() => "");
       const kind = classifyGrokCliError(response.status, text);
       return this.failChat(
-        `Grok CLI stream HTTP ${response.status}: ${text.slice(0, 300)}`,
+        kind === "exhausted"
+          ? GROK_CLI_CREDIT_SOFT_ERROR
+          : `Grok CLI stream HTTP ${response.status}: ${text.slice(0, 300)}`,
         {
           quotaExhausted: kind === "exhausted",
           deadAccount: kind === "dead",
@@ -1066,62 +1221,197 @@ export class GrokCliProvider extends BaseProvider {
   }
 
   /**
-   * OAuth-aware health via proveSession(if-needed).
+   * OAuth-aware health via proveSession(if-needed) + center credit probe.
    * Never reports healthy for invalid_grant (permanent revocation).
+   * 402 spending-limit / free-usage death → kind exhausted (warmup zeros quota).
    */
   override async healthCheck(account: Account): Promise<
     import("./base").ProviderHealthResult
   > {
     const proved = await this.proveSession(account, "if-needed");
-    if (proved.ok) {
-      const quota = await this.fetchQuota(account);
+    if (!proved.ok) {
+      if (proved.kind === "session_revoked") {
+        return {
+          kind: "session_expired",
+          success: false,
+          retryable: false,
+          error: proved.error,
+          metadata: { permanentRevocation: true },
+        };
+      }
+      if (proved.kind === "missing_tokens") {
+        return {
+          kind: "missing_tokens",
+          success: false,
+          retryable: false,
+          error: proved.error,
+        };
+      }
       return {
-        kind: "healthy",
+        kind: "auth_error",
+        success: false,
+        retryable: true,
+        error: proved.error,
+      };
+    }
+
+    // Session OK — probe center credit so UI/pool don't lie about 2M local remaining.
+    const working = proved.tokens
+      ? ({ ...account, tokens: proved.tokens } as Account)
+      : account;
+    const quota = await this.fetchQuota(working);
+    const q = quota.quota;
+    const exhausted =
+      quota.exhausted === true ||
+      (q != null && Number(q.remaining) <= 0 && Number(q.limit) > 0);
+
+    if (exhausted) {
+      return {
+        kind: "exhausted",
         success: true,
         tokens: proved.tokens,
-        message: proved.message,
-        quota: quota.quota
-          ? { ...quota.quota, source: "grok-cli.fetchQuota" }
-          : undefined,
+        message: quota.error || GROK_CLI_CREDIT_SOFT_ERROR,
+        quota: q
+          ? {
+              limit: q.limit,
+              remaining: 0,
+              used: q.used ?? Math.max(0, q.limit),
+              resetAt: q.resetAt ?? null,
+              source: q.source || "grok-cli.fetchQuota",
+            }
+          : {
+              limit: GROK_CLI_TOKEN_LIMIT,
+              remaining: 0,
+              used: GROK_CLI_TOKEN_LIMIT,
+              resetAt: null,
+              source: "upstream-exhausted",
+            },
       };
     }
-    if (proved.kind === "session_revoked") {
-      return {
-        kind: "session_expired",
-        success: false,
-        retryable: false,
-        error: proved.error,
-        metadata: { permanentRevocation: true },
-      };
-    }
-    if (proved.kind === "missing_tokens") {
-      return {
-        kind: "missing_tokens",
-        success: false,
-        retryable: false,
-        error: proved.error,
-      };
-    }
+
     return {
-      kind: "auth_error",
-      success: false,
-      retryable: true,
-      error: proved.error,
+      kind: "healthy",
+      success: true,
+      tokens: proved.tokens,
+      message: proved.message,
+      quota: q
+        ? {
+            limit: q.limit,
+            remaining: q.remaining,
+            used: q.used,
+            resetAt: q.resetAt ?? null,
+            source: q.source || "grok-cli.fetchQuota",
+          }
+        : undefined,
     };
   }
 
+  /**
+   * Prefer center signals (tiny chat probe → rate-limit headers / 402 body).
+   * Fallback to local quota* columns only with source local-estimated (never claim upstream).
+   */
   async fetchQuota(account: Account): Promise<{
     success: boolean;
-    quota?: { limit: number; remaining: number; used: number; resetAt?: Date | string | null };
+    quota?: {
+      limit: number;
+      remaining: number;
+      used: number;
+      resetAt?: Date | string | null;
+      source?: string;
+    };
+    exhausted?: boolean;
     error?: string;
   }> {
-    const limit = Number(account.quotaLimit) > 0 ? Number(account.quotaLimit) : GROK_CLI_TOKEN_LIMIT;
+    const tokens = this.getTokens(account);
+    if (!tokens?.access_token) {
+      return { success: false, error: "No access_token" };
+    }
+
+    // Tiny non-stream probe — same path as live traffic; center returns
+    // x-ratelimit-* on OK or 402 spending-limit / 429 free-usage body.
+    try {
+      const response = await this.fetchWithTimeout(
+        `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
+        {
+          method: "POST",
+          headers: buildGrokCliHeaders(
+            { ...tokens, email: account.email || tokens.email },
+            "grok-4"
+          ),
+          body: JSON.stringify({
+            model: "grok-4",
+            messages: [{ role: "user", content: "1" }],
+            max_tokens: 1,
+            stream: false,
+          }),
+        },
+        config.providerQuotaTimeoutMs
+      );
+
+      const bodyText = await response.text().catch(() => "");
+      const center = quotaFromGrokCliCenterSignals({
+        headers: response.headers,
+        body: bodyText,
+        status: response.status,
+      });
+
+      if (center) {
+        return {
+          success: true,
+          exhausted: center.exhausted,
+          error: center.exhausted ? GROK_CLI_CREDIT_SOFT_ERROR : undefined,
+          quota: {
+            limit: center.limit,
+            remaining: center.remaining,
+            used: center.used,
+            resetAt: center.resetAt,
+            source: center.source,
+          },
+        };
+      }
+
+      // Unexpected non-OK without classifiable credit death — don't invent full local.
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `Grok CLI quota probe HTTP ${response.status}`,
+        };
+      }
+    } catch (e) {
+      // Network blip — fall through to local estimate, labeled honestly.
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        success: true,
+        ...this.localEstimatedQuota(account),
+        error: `quota probe failed: ${msg.slice(0, 120)}`,
+      };
+    }
+
+    return { success: true, ...this.localEstimatedQuota(account) };
+  }
+
+  private localEstimatedQuota(account: Account): {
+    quota: {
+      limit: number;
+      remaining: number;
+      used: number;
+      resetAt: null;
+      source: "local-estimated";
+    };
+  } {
+    const limit =
+      Number(account.quotaLimit) > 0 ? Number(account.quotaLimit) : GROK_CLI_TOKEN_LIMIT;
     const remainingRaw = account.quotaRemaining;
     const remaining = typeof remainingRaw === "number" ? remainingRaw : limit;
     const used = Math.max(0, limit - remaining);
     return {
-      success: true,
-      quota: { limit, remaining: Math.max(0, remaining), used, resetAt: null },
+      quota: {
+        limit,
+        remaining: Math.max(0, remaining),
+        used,
+        resetAt: null,
+        source: "local-estimated",
+      },
     };
   }
 }
