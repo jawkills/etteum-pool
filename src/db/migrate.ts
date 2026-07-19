@@ -68,9 +68,13 @@ export async function runMigrations() {
 
 async function runProviderRename() {
   try {
-    await db.run(sql.raw("UPDATE accounts SET provider = 'grok' WHERE provider = 'grok'"));
-    await db.run(sql.raw("UPDATE request_logs SET provider = 'grok' WHERE provider = 'grok'"));
-    await db.run(sql.raw("UPDATE usage_summary SET provider = 'grok' WHERE provider = 'grok'"));
+    // Source is 'grok-cli'; target is 'grok'. The previous WHERE clause
+    // matched the target ('grok'), making the UPDATE a no-op — so existing
+    // rows stayed tagged 'grok-cli' and the pool (which queries
+    // provider='grok') saw zero active accounts, returning 503.
+    await db.run(sql.raw("UPDATE accounts SET provider = 'grok' WHERE provider = 'grok-cli'"));
+    await db.run(sql.raw("UPDATE request_logs SET provider = 'grok' WHERE provider = 'grok-cli'"));
+    await db.run(sql.raw("UPDATE usage_summary SET provider = 'grok' WHERE provider = 'grok-cli'"));
     await db.run(sql.raw("UPDATE settings SET key = 'grok_refresh_lead_sec' WHERE key = 'grok_cli_refresh_lead_sec'"));
     await db.run(sql.raw("UPDATE settings SET key = 'grok_max_account_retries' WHERE key = 'grok_cli_max_account_retries'"));
     console.log("[DB] Provider rename grok-cli → grok applied (idempotent)");

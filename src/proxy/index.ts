@@ -17,7 +17,11 @@ import { normalizeModelId, resolveModelAlias } from "./model-mapping";
 import { eq } from "drizzle-orm";
 import { providerList, refreshByokModels } from "./providers/registry";
 import { imagesRouter } from "./images";
-import { recordRequest } from "./request-log";
+import {
+  recordRequest,
+  insertRequestLog,
+  finalizeRequestLog,
+} from "./request-log";
 
 export { recordRequest } from "./request-log";
 
@@ -144,18 +148,9 @@ function openAIErrorResponse(message: string, status: 400 | 503) {
   };
 }
 
-async function logProxyError(entry: NewRequestLog, label: string) {
-  try {
-    await db.insert(requestLogs).values(entry);
-    // Also track errors in usage_summary
-    void upsertUsageSummary({
-      provider: entry.provider || "unknown", model: entry.model || "unknown", status: "error",
-      promptTokens: 0, completionTokens: 0, totalTokens: 0, creditsUsed: 0, durationMs: entry.durationMs || 0,
-    });
-    if (++requestCounter % 10 === 0) void pruneRequestLogs();
-  } catch (logError) {
-    console.error(`[Proxy] Failed to log ${label}:`, logError);
-  }
+/** Record an error request log. recordRequest swallows DB errors internally. */
+async function logProxyError(entry: NewRequestLog) {
+  await recordRequest(entry);
 }
 
 function wrapStreamWithUsageFinalizer(
@@ -293,17 +288,16 @@ function wrapStreamWithUsageFinalizer(
         }
 
         if (context.logId) {
-          await db
-            .update(requestLogs)
-            .set({
-              promptTokens: finalPromptTokens,
-              completionTokens: finalCompletionTokens,
-              totalTokens: finalTotalTokens,
-              creditsUsed,
-              durationMs,
-              accountQuotaAfter: quotaAfter,
-            })
-            .where(eq(requestLogs.id, context.logId));
+          await finalizeRequestLog(context.logId, {
+            provider: context.provider,
+            model: context.model,
+            promptTokens: finalPromptTokens,
+            completionTokens: finalCompletionTokens,
+            totalTokens: finalTotalTokens,
+            creditsUsed,
+            durationMs,
+            accountQuotaAfter: quotaAfter,
+          });
         }
 
         broadcast({
@@ -335,14 +329,6 @@ function wrapStreamWithUsageFinalizer(
             }),
           },
         });
-
-        // Upsert to usage_summary + periodic prune
-        void upsertUsageSummary({
-          provider: context.provider, model: context.model, status: "success",
-          promptTokens: finalPromptTokens, completionTokens: finalCompletionTokens,
-          totalTokens: finalTotalTokens, creditsUsed, durationMs,
-        });
-        if (++requestCounter % 10 === 0) void pruneRequestLogs();
       } catch (error) {
         console.error("[Proxy] Failed to finalize stream usage:", error);
       } finally {
@@ -459,7 +445,7 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
   };
 
     if (isStream && result.stream) {
-      const [created] = await db.insert(requestLogs).values(logEntry).returning();
+      const created = await insertRequestLog(logEntry);
       const createdAt = created?.createdAt?.toISOString?.() || new Date().toISOString();
 
     broadcast({
@@ -487,19 +473,7 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
       return { result, isStream };
     }
 
-  await db.insert(requestLogs).values(logEntry);
-
-  // Upsert to usage_summary + periodic prune
-  void upsertUsageSummary({
-    provider, model: body.model, status: "success",
-    promptTokens, completionTokens, totalTokens, creditsUsed, durationMs,
-  });
-  if (++requestCounter % 10 === 0) void pruneRequestLogs();
-
-  broadcast({
-    type: "request_log",
-    data: { ...logEntry, email: account.email, createdAt: new Date().toISOString() },
-  });
+  await recordRequest(logEntry);
 
     return { result, isStream };
   } finally {
@@ -597,7 +571,7 @@ proxyRouter.post("/v1/chat/completions", async (c) => {
       requestBody: prepareLogBody({ ...body, model: mappedModel, _poolprox: { originalModel: body.model } }),
       responseBody: prepareLogBody({ error: errorMessage }),
       durationMs: 0,
-    }, "chat completion error");
+    });
 
     broadcast({
       type: "request_error",
@@ -672,7 +646,7 @@ proxyRouter.post("/v1/messages", async (c) => {
       requestBody: prepareLogBody({ ...body, model: mappedModel, _poolprox: { originalModel: body.model } }),
       responseBody: prepareLogBody({ error: errorMessage }),
       durationMs: 0,
-    }, "messages error");
+    });
 
     broadcast({ type: "request_error", data: { model: mappedModel, error: errorMessage } });
 

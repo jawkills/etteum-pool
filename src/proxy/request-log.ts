@@ -1,17 +1,23 @@
 /**
- * Request log persistence — extracted from proxy/index.ts so image routes
- * (and other callers) can log without circular imports through the Hono router.
+ * Request log persistence — single source of truth for writing request_logs,
+ * upserting usage_summary, periodic pruning, and broadcasting request_log
+ * events. Extracted from proxy/index.ts so image routes (and other callers)
+ * can log without circular imports through the Hono router.
+ *
+ * Public surface (recordRequest, insertRequestLog, trackUsageAndPrune,
+ * finalizeRequestLog, pruneRequestLogs) covers every legitimate caller.
+ * The internal upsertUsageSummary / requestCounter are not exported — if you
+ * find yourself reaching for them, extend the public API instead.
  */
 
 import { db } from "../db/index";
 import { requestLogs, type NewRequestLog } from "../db/schema";
 import { broadcast } from "../ws/index";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 
 const MAX_REQUEST_LOGS = 50;
 
-/** Upsert a request's stats into the usage_summary table (hourly bucket) */
-async function upsertUsageSummary(entry: {
+interface UsageSummaryInput {
   provider: string;
   model: string;
   status: string;
@@ -20,7 +26,10 @@ async function upsertUsageSummary(entry: {
   totalTokens: number;
   creditsUsed: number;
   durationMs: number;
-}) {
+}
+
+/** Upsert a request's stats into the usage_summary table (hourly bucket) */
+async function upsertUsageSummary(entry: UsageSummaryInput) {
   try {
     const bucket = new Date();
     bucket.setMinutes(0, 0, 0); // truncate to hour
@@ -47,7 +56,7 @@ async function upsertUsageSummary(entry: {
 }
 
 /** Prune request_logs to keep only the most recent MAX_REQUEST_LOGS rows */
-async function pruneRequestLogs() {
+export async function pruneRequestLogs() {
   try {
     await db.run(sql`
       DELETE FROM request_logs WHERE id NOT IN (
@@ -59,28 +68,120 @@ async function pruneRequestLogs() {
   }
 }
 
-// Prune every 10 requests to avoid running DELETE on every single insert
+// Prune every 10 requests to avoid running DELETE on every single insert.
 let requestCounter = 0;
 
-export async function recordRequest(entry: NewRequestLog) {
+/**
+ * Update usage_summary for this request and run periodic prune. Used by both
+ * the insert path (recordRequest/insertRequestLog) and the update path
+ * (finalizeRequestLog) so the counter stays in one place.
+ */
+function trackUsageAndPrune(usage: UsageSummaryInput) {
+  void upsertUsageSummary(usage);
+  if (++requestCounter % 10 === 0) void pruneRequestLogs();
+}
+
+/** Insert a request_logs row, then update usage_summary + periodic prune. */
+async function insertWithUsage(
+  entry: NewRequestLog,
+): Promise<{ id: number; createdAt: Date } | null> {
+  const [created] = await db.insert(requestLogs).values(entry).returning({
+    id: requestLogs.id,
+    createdAt: requestLogs.createdAt,
+  });
+
+  trackUsageAndPrune({
+    provider: entry.provider || "unknown",
+    model: entry.model || "unknown",
+    status: entry.status,
+    promptTokens: entry.promptTokens || 0,
+    completionTokens: entry.completionTokens || 0,
+    totalTokens: entry.totalTokens || 0,
+    creditsUsed: entry.creditsUsed || 0,
+    durationMs: entry.durationMs || 0,
+  });
+  return created ? { id: created.id, createdAt: created.createdAt } : null;
+}
+
+/**
+ * Canonical request_logs writer for non-stream success.
+ *
+ * Inserts the row, updates usage_summary, runs periodic prune, and emits the
+ * `request_log` broadcast. Returns the created row (id/createdAt) so callers
+ * that need the id (e.g. for streaming telemetry) can use it.
+ *
+ * Swallows and logs DB errors internally — never throws to the caller.
+ */
+export async function recordRequest(
+  entry: NewRequestLog,
+): Promise<{ id: number; createdAt: Date } | null> {
   try {
-    await db.insert(requestLogs).values(entry);
-    void upsertUsageSummary({
-      provider: entry.provider || "unknown",
-      model: entry.model || "unknown",
-      status: entry.status,
-      promptTokens: entry.promptTokens || 0,
-      completionTokens: entry.completionTokens || 0,
-      totalTokens: entry.totalTokens || 0,
-      creditsUsed: entry.creditsUsed || 0,
-      durationMs: entry.durationMs || 0,
-    });
-    if (++requestCounter % 10 === 0) void pruneRequestLogs();
+    const created = await insertWithUsage(entry);
     broadcast({
       type: "request_log",
-      data: { ...entry, email: entry.accountEmail, createdAt: new Date().toISOString() },
+      data: { ...entry, id: created?.id, email: entry.accountEmail, createdAt: new Date().toISOString() },
     });
+    return created;
   } catch (err) {
     console.error("[Proxy] Failed to record request:", err);
+    return null;
   }
+}
+
+/**
+ * Insert a request_logs row and update usage_summary, but DON'T broadcast.
+ * Use this when the caller manages its own broadcast (e.g. the streaming path
+ * needs `request_started` before completion, with different shape/timing).
+ */
+export async function insertRequestLog(
+  entry: NewRequestLog,
+): Promise<{ id: number; createdAt: Date } | null> {
+  try {
+    return await insertWithUsage(entry);
+  } catch (err) {
+    console.error("[Proxy] Failed to insert request log:", err);
+    return null;
+  }
+}
+
+/**
+ * Update an existing request_logs row (streaming finalizer) and update
+ * usage_summary + periodic prune. Does not broadcast — the streaming path
+ * emits its own `request_log` event with stream-specific shape.
+ */
+export async function finalizeRequestLog(
+  logId: number,
+  patch: {
+    provider: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    creditsUsed: number;
+    durationMs: number;
+    accountQuotaAfter: number;
+  },
+) {
+  await db
+    .update(requestLogs)
+    .set({
+      promptTokens: patch.promptTokens,
+      completionTokens: patch.completionTokens,
+      totalTokens: patch.totalTokens,
+      creditsUsed: patch.creditsUsed,
+      durationMs: patch.durationMs,
+      accountQuotaAfter: patch.accountQuotaAfter,
+    })
+    .where(eq(requestLogs.id, logId));
+
+  trackUsageAndPrune({
+    provider: patch.provider || "unknown",
+    model: patch.model || "unknown",
+    status: "success",
+    promptTokens: patch.promptTokens,
+    completionTokens: patch.completionTokens,
+    totalTokens: patch.totalTokens,
+    creditsUsed: patch.creditsUsed,
+    durationMs: patch.durationMs,
+  });
 }
