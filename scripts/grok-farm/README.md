@@ -46,12 +46,60 @@ cp .env.example .env   # then edit secrets
 
 Dashboard injects `ETTEUM_URL` + `ETTEUM_API_KEY` and forces `--push` so accounts land in the pool.
 
+## Success semantics (important)
+
+With push enabled (dashboard default / `--push`):
+
+- **`[OK]` means farmed + imported into the pool** (`imported >= 1`).
+- Disk `results/.../accounts.json` is still written when tokens are obtained (recovery).
+- Push/import failure emits **`[FAIL] … PUSH:…`** and counts as a farm failure (not success).
+- Without push (`--no-push` / `GROK_PUSH_ETTEUM=false`), `[OK]` means tokens farmed only.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Finished with at least one success (or zero-target edge cases) |
+| `1` | Zero accounts succeeded (all farm or push failed) |
+| `2` | Config / preflight error (missing key, solver, etc.) |
+| `3` | Push was on, some tokens farmed, but **every** success path failed push |
+
+## Log contract (`GROK_UI=log`, dashboard)
+
+```
+[BATCH] dir=...
+12:34:56  [STEP]  #1  user@x.com  OTP
+12:34:56  [OK]  #1  user@x.com  imported
+12:34:56  [FAIL]  #2  other@x.com  PUSH:imported=0
+ OK 1  FAIL 1  PUSH_FAIL 1  TOTAL 2  OUT ...
+```
+
+TS parser: `src/auth/grok-farm-queue.ts` → `parseGrokFarmLogLine`.
+
 ## Layout
 
 | Path | Role |
 |------|------|
-| `http_farm.py` | Signup + OAuth + batch |
+| `http_farm.py` | Entry + batch worker/main (dashboard spawn) |
+| `farm_env.py` | Env/config constants |
+| `proxy.py` | Proxy normalize + thread-safe rotation |
+| `hud.py` | ANSI HUD + human log + NDJSON `GROK_EVENT` |
+| `tempmail.py` | Mailbox + OTP |
+| `captcha.py` | Boterdrop clearance/turnstile |
+| `pb.py` | gRPC-Web / protobuf helpers |
+| `xai_http.py` | XAI session + OAuth tokens |
+| `flows.py` | `run_signup` / `run_reauth` |
 | `etteum_push.py` | Import client |
+| `fixtures/` | Golden CPA shapes shared with TS tests |
+| `test_*.py` | Unit tests (proxy rotation, push map) |
 | `requirements.txt` | HTTP deps only (no browser) |
 | `.env` | Secrets (gitignored) |
 | `results/` | Batch output (gitignored) |
+
+## Tests
+
+```bash
+cd scripts/grok-farm
+# with venv active:
+python -m unittest test_etteum_push test_proxy_rotate -v
+```

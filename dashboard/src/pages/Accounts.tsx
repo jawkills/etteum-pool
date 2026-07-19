@@ -314,6 +314,20 @@ export default function Accounts() {
     }
   );
 
+  // Reauth refreshes existing rows — reload list without inventing "created" accounts.
+  useWsEvent(
+    ["grok_reauth_complete", "grok_reauth_success", "accounts_updated"],
+    (msg) => {
+      if (
+        msg.type === "grok_reauth_complete" ||
+        msg.type === "grok_reauth_success" ||
+        (msg.type === "accounts_updated" && (msg.data as any)?.provider === "grok-cli")
+      ) {
+        load().catch(() => {});
+      }
+    }
+  );
+
   useEffect(() => {
     // Always poll while farm running (banner); also while Grok dialog open
     const dialogOpen = addDialogProvider === "grok-cli";

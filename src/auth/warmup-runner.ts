@@ -623,52 +623,9 @@ export async function warmupAccount(account: Account): Promise<WarmupResult> {
     };
   }
 
-  // Short-circuit permanent IdP revocation only (not bare missing_tokens).
-  // Provider healthCheck remains the single prove path for everything else.
-  if (isPermanentRevocation(account.errorMessage)) {
-    const err = account.errorMessage || "Account session permanently revoked";
-    const startLog = addAuthLog({
-      type: "warmup_skipped_dead",
-      accountId: account.id,
-      email: account.email,
-      provider: account.provider,
-      step: "dead",
-      message: `WarmUp skipped revoked account ${account.provider}/${account.email}`,
-      error: err,
-    });
-    broadcast({
-      type: "warmup_skipped_dead",
-      data: {
-        logId: startLog.id,
-        id: account.id,
-        accountId: account.id,
-        email: account.email,
-        provider: account.provider,
-        step: "dead",
-        message: startLog.message,
-        error: err,
-        timestamp: startLog.timestamp,
-      },
-    });
-    if (account.status !== "error") {
-      await db
-        .update(accounts)
-        .set({ status: "error", errorMessage: err, updatedAt: new Date() })
-        .where(eq(accounts.id, account.id));
-      pool.invalidate(account.provider as ProviderName);
-    }
-    return {
-      success: false,
-      accountId: account.id,
-      provider: account.provider,
-      email: account.email,
-      previousStatus: account.status,
-      status: "error",
-      kind: "session_expired",
-      error: err,
-      message: "Skipped WarmUp: permanent session revocation (reauth/re-farm required)",
-    };
-  }
+  // Permanent IdP revocation short-circuit is owned by provider.healthCheck /
+  // proveSession (and session-prove for force-refresh). WarmUp only logs if
+  // health returns session_expired with permanent metadata — no second gate.
 
   const startLog = addAuthLog({
     type: "warmup_processing",
@@ -693,7 +650,30 @@ export async function warmupAccount(account: Account): Promise<WarmupResult> {
     },
   });
 
-  const health: ProviderHealthResult = await provider.healthCheck(account);
+  // Prefer proveAccountSession when provider implements proveSession (shared
+  // disposition with force-refresh API). Fall back to healthCheck for others.
+  // healthCheck on grok-cli already calls proveSession + credit probe; using
+  // proveAccountSession here keeps permanent-revocation latch in one place
+  // (session-prove) before optional credit refinement.
+  let health: ProviderHealthResult;
+  if (typeof (provider as any).proveSession === "function") {
+    const { proveAccountSession, sessionProveToHealth } = await import(
+      "../proxy/session-prove"
+    );
+    const proved = await proveAccountSession(account, "if-needed");
+    if (!proved.ok) {
+      health = sessionProveToHealth(proved);
+    } else {
+      // Session ok — healthCheck still needed for center quota / exhausted.
+      const accountForHealth =
+        proved.tokens !== undefined
+          ? ({ ...account, tokens: proved.tokens } as typeof account)
+          : account;
+      health = await provider.healthCheck(accountForHealth);
+    }
+  } else {
+    health = await provider.healthCheck(account);
+  }
 
   // Probes — each may mutate `health` in place.
   await runKiroOverageProbe(provider, account, health);

@@ -1,0 +1,7 @@
+{
+  "email": "farm-flat@example.com",
+  "access_token": "at-flat",
+  "refresh_token": "rt-flat",
+  "id_token": "idt-flat",
+  "expires_at": "2026-07-17T12:00:00Z"
+}

@@ -1,11 +1,18 @@
 # test_etteum_push.py
+import json
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 from etteum_push import (
     account_to_import_item,
     build_import_payload,
     push_enabled_from_env,
     parse_push_cli_flags,
+    push_one_farm_result,
 )
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 class TestAccountToImportItem(unittest.TestCase):
@@ -38,6 +45,20 @@ class TestAccountToImportItem(unittest.TestCase):
         self.assertEqual(item["access_token"], "at2")
         self.assertEqual(item["refresh_token"], "rt2")
 
+    def test_fixture_nested_matches_shape(self):
+        raw = json.loads((FIXTURES / "cpa_nested_tokens.json").read_text(encoding="utf-8"))
+        item = account_to_import_item(raw)
+        self.assertEqual(item["email"], "farm-nested@example.com")
+        self.assertEqual(item["tokens"]["access_token"], "at-nested")
+        self.assertEqual(item["password"], "secret-pw")
+
+    def test_fixture_flat_matches_shape(self):
+        raw = json.loads((FIXTURES / "cpa_flat_tokens.json").read_text(encoding="utf-8"))
+        item = account_to_import_item(raw)
+        self.assertEqual(item["email"], "farm-flat@example.com")
+        self.assertEqual(item["access_token"], "at-flat")
+        self.assertEqual(item["refresh_token"], "rt-flat")
+
 
 class TestBuildPayload(unittest.TestCase):
     def test_wraps_list(self):
@@ -60,6 +81,32 @@ class TestFlags(unittest.TestCase):
         rest, no_push = parse_push_cli_flags(["-n", "2", "--no-push", "-y"])
         self.assertTrue(no_push)
         self.assertEqual(rest, ["-n", "2", "-y"])
+
+
+class TestPushOneImportedZero(unittest.TestCase):
+    """Worker treats imported<1 as failure — ensure response shape is readable."""
+
+    @patch("etteum_push.urllib.request.urlopen")
+    def test_imported_zero_response(self, mock_urlopen):
+        body = json.dumps({"imported": 0, "failed": 1, "results": []}).encode("utf-8")
+        resp = MagicMock()
+        resp.read.return_value = body
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        mock_urlopen.return_value = resp
+
+        result = {
+            "email": "z@x.com",
+            "password": "pw",
+            "tokens": {"access_token": "at", "refresh_token": "rt"},
+        }
+        data = push_one_farm_result(
+            result,
+            base_url="http://127.0.0.1:1930",
+            api_key="test-key",
+            retries=1,
+        )
+        self.assertEqual(int(data.get("imported") or 0), 0)
 
 
 if __name__ == "__main__":

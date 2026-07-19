@@ -13,26 +13,15 @@ import {
   isPermanentRevocation,
 } from "./account-health";
 import type { ProviderHealthResult } from "./providers/base";
+import {
+  sessionProveToHealth,
+  type ProveMode,
+  type SessionProveKind,
+  type SessionProveResult,
+} from "./session-prove-map";
 
-export type ProveMode = "if-needed" | "force-refresh";
-
-export type SessionProveKind =
-  | "healthy"
-  | "session_revoked"
-  | "missing_tokens"
-  | "auth_error"
-  | "unsupported";
-
-export type SessionProveResult = {
-  ok: boolean;
-  kind: SessionProveKind;
-  tokens?: unknown;
-  error?: string;
-  message?: string;
-  refreshed: boolean;
-  /** ProviderHealthKind-compatible mapping for warmup runner. */
-  healthKind?: ProviderHealthResult["kind"];
-};
+export type { ProveMode, SessionProveKind, SessionProveResult };
+export { sessionProveToHealth };
 
 function parseTokensPayload(tokens: string | undefined): unknown | undefined {
   if (!tokens) return undefined;
@@ -40,49 +29,6 @@ function parseTokensPayload(tokens: string | undefined): unknown | undefined {
     return JSON.parse(tokens);
   } catch {
     return tokens;
-  }
-}
-
-/** Map prove result → ProviderHealthResult shape. */
-export function sessionProveToHealth(result: SessionProveResult): ProviderHealthResult {
-  if (result.ok) {
-    return {
-      kind: "healthy",
-      success: true,
-      tokens: result.tokens,
-      message: result.message,
-    };
-  }
-  switch (result.kind) {
-    case "session_revoked":
-      return {
-        kind: "session_expired",
-        success: false,
-        retryable: false,
-        error: result.error,
-        metadata: { permanentRevocation: true },
-      };
-    case "missing_tokens":
-      return {
-        kind: "missing_tokens",
-        success: false,
-        retryable: false,
-        error: result.error,
-      };
-    case "unsupported":
-      return {
-        kind: "unsupported",
-        success: false,
-        retryable: false,
-        error: result.error,
-      };
-    default:
-      return {
-        kind: "auth_error",
-        success: false,
-        retryable: true,
-        error: result.error,
-      };
   }
 }
 

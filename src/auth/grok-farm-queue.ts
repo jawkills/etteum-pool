@@ -1,12 +1,20 @@
-import { spawn, type ChildProcess } from "node:child_process";
+/**
+ * Grok CLI farm job — signup batch via http_farm.py.
+ * Lifecycle shared with reauth via grok-farm-process.
+ */
+
 import { broadcast } from "../ws/index";
-import { pool } from "../proxy/pool";
-import { addAuthLog } from "./logs";
+import { parseGrokFarmLogLine } from "./grok-farm-log";
 import {
-  grokFarmChildEnv,
-  resolveGrokFarmApiKey,
-  resolveGrokFarmPython,
-} from "./grok-farm-spawn";
+  emitGrokProcessLog,
+  GrokProcessLatch,
+  invalidateGrokCliPool,
+  killGrokFarmChild,
+  spawnGrokFarmChild,
+} from "./grok-farm-process";
+
+export type { GrokFarmLogParse } from "./grok-farm-log";
+export { parseGrokFarmLogLine } from "./grok-farm-log";
 
 export type GrokFarmStatus = {
   running: boolean;
@@ -40,79 +48,9 @@ export function createIdleGrokFarmStatus(): GrokFarmStatus {
   };
 }
 
-export type GrokFarmLogParse =
-  | { kind: "summary"; success: number; failed: number }
-  | { kind: "batch_dir"; batchDir: string }
-  | { kind: "step"; attempt: number; email?: string; step: string; detail?: string }
-  | { kind: "ok"; attempt: number; email?: string; detail?: string }
-  | { kind: "fail"; attempt: number; email?: string; detail?: string }
-  | { kind: "progress"; message: string }
-  | null;
-
-/**
- * Parse http_farm.py log lines (GROK_UI=log format):
- *   12:34:56  [STEP]  #1  user@x.com  OTP
- *   12:34:56  [OK]  #1  user@x.com  12s
- *   12:34:56  [FAIL]  #1  user@x.com  CAPTCHA:FAIL
- *   [BATCH] dir=...
- *    OK 3  FAIL 1  TOTAL 5  OUT ...
- */
-export function parseGrokFarmLogLine(line: string): GrokFarmLogParse {
-  const s = line.trim();
-  if (!s) return null;
-
-  let m = s.match(/OK\s+(\d+)\s+FAIL\s+(\d+)/i);
-  if (m && !s.includes("[OK]")) {
-    return { kind: "summary", success: Number(m[1]), failed: Number(m[2]) };
-  }
-
-  m = s.match(/\[BATCH\]\s*dir=(.+)/i);
-  if (m) return { kind: "batch_dir", batchDir: m[1]!.trim() };
-
-  // [STEP] #N email? detail?
-  m = s.match(/\[STEP\]\s*#(\d+)(?:\s+(\S+@\S+))?(?:\s+(.+))?$/i);
-  if (m) {
-    return {
-      kind: "step",
-      attempt: Number(m[1]),
-      email: m[2] || undefined,
-      step: (m[3] || "progress").trim(),
-      detail: m[3]?.trim(),
-    };
-  }
-
-  m = s.match(/\[OK\]\s*#(\d+)(?:\s+(\S+@\S+))?(?:\s+(.+))?$/i);
-  if (m) {
-    return {
-      kind: "ok",
-      attempt: Number(m[1]),
-      email: m[2] || undefined,
-      detail: m[3]?.trim(),
-    };
-  }
-
-  m = s.match(/\[FAIL\]\s*#(\d+)(?:\s+(\S+@\S+))?(?:\s+(.+))?$/i);
-  if (m) {
-    return {
-      kind: "fail",
-      attempt: Number(m[1]),
-      email: m[2] || undefined,
-      detail: m[3]?.trim(),
-    };
-  }
-
-  if (/ERROR:|etteum preflight|push fail|spawn error/i.test(s)) {
-    return { kind: "progress", message: s.slice(0, 300) };
-  }
-
-  return null;
-}
-
 class GrokFarmQueue {
   private status: GrokFarmStatus = createIdleGrokFarmStatus();
-  private child: ChildProcess | null = null;
-  /** Sync latch so concurrent start() cannot both pass the running check during await getActiveApiKey. */
-  private startLock = false;
+  private latch = new GrokProcessLatch();
   /** attempt# → last known email for grouping Bot Logs */
   private attemptEmail = new Map<number, string>();
 
@@ -133,55 +71,21 @@ class GrokFarmQueue {
     error?: string;
     data?: unknown;
   }) {
-    const log = addAuthLog({
-      provider: "grok-cli",
-      ...entry,
-    });
-    // Never map auth-log serial id → accountId (Bot Logs would show "Account #N").
-    broadcast({
-      type: entry.type,
-      data: {
-        logId: log.id,
-        timestamp: log.timestamp,
-        type: entry.type,
-        provider: "grok-cli",
-        email: entry.email || log.email,
-        step: entry.step || log.step,
-        message: entry.message || log.message,
-        error: entry.error || log.error,
-        data: entry.data,
-      },
-    });
+    emitGrokProcessLog(entry);
   }
 
   async start(opts: {
     count: number;
     concurrent: number;
   }): Promise<{ ok: true; status: GrokFarmStatus } | { ok: false; error: string }> {
-    // Sync gate first — must not await between check and latch.
-    if (this.startLock || this.status.running || this.child) {
+    const generation = this.latch.tryAcquire();
+    if (generation == null) {
       return { ok: false, error: "Grok farm already running" };
     }
-    this.startLock = true;
 
     try {
       const count = Math.max(1, Math.min(1000, Math.floor(opts.count)));
       const concurrent = Math.max(1, Math.min(20, Math.floor(opts.concurrent)));
-
-      const py = resolveGrokFarmPython();
-      if (!py.ok) {
-        this.startLock = false;
-        return { ok: false, error: py.error };
-      }
-
-      const key = await resolveGrokFarmApiKey();
-      if (!key.ok) {
-        this.startLock = false;
-        return { ok: false, error: key.error };
-      }
-
-      const { farmDir, script, pyBin, pyArgs } = py.value;
-      const { apiKey, etteumUrl } = key;
 
       this.attemptEmail.clear();
       this.setStatus({
@@ -193,25 +97,70 @@ class GrokFarmQueue {
         lastMessage: "starting http_farm.py",
       });
 
-      const spawnArgs = [
-        ...pyArgs,
-        script,
-        "-n",
-        String(count),
-        "-c",
-        String(concurrent),
-        "-y",
-        "--push",
-      ];
-
-      const child = spawn(pyBin, spawnArgs, {
-        cwd: farmDir,
-        env: grokFarmChildEnv(apiKey, etteumUrl),
-        windowsHide: true,
+      const spawned = await spawnGrokFarmChild({
+        args: ["-n", String(count), "-c", String(concurrent), "-y", "--push"],
+        onLine: (line) => this.handleLine(line),
+        onSpawnError: (err) => {
+          if (!this.latch.release(generation)) return;
+          this.setStatus({
+            running: false,
+            finishedAt: new Date().toISOString(),
+            error: err.message,
+            lastMessage: `spawn error: ${err.message}`,
+          });
+          this.emitLog({
+            type: "grok_farm_failed",
+            step: "spawn",
+            message: `spawn error: ${err.message}`,
+            error: err.message,
+          });
+        },
+        onClose: (code) => {
+          if (!this.latch.release(generation)) return;
+          invalidateGrokCliPool();
+          const ok = code === 0;
+          this.setStatus({
+            running: false,
+            finishedAt: new Date().toISOString(),
+            lastMessage: ok ? "farm finished" : `farm exit ${code}`,
+            error: ok ? null : `exit ${code}`,
+          });
+          this.emitLog({
+            type: ok ? "grok_farm_complete" : "grok_farm_failed",
+            step: "complete",
+            message: ok
+              ? `Farm complete: ${this.status.success} ok, ${this.status.failed} fail / ${this.status.target}`
+              : `Farm exited ${code}: ${this.status.success} ok, ${this.status.failed} fail`,
+            error: !ok ? `exit ${code}` : undefined,
+            data: this.getStatus(),
+          });
+          if (ok) {
+            broadcast({ type: "grok_farm_complete", data: this.getStatus() });
+            if (this.status.success > 0) {
+              broadcast({
+                type: "accounts_bulk_created",
+                data: { count: this.status.success, provider: "grok-cli" },
+              });
+            }
+          } else {
+            broadcast({ type: "grok_farm_failed", data: this.getStatus() });
+          }
+        },
       });
 
-      this.child = child;
-      this.setStatus({ pid: child.pid ?? null });
+      if (!spawned.ok) {
+        this.latch.forceClear();
+        this.setStatus({
+          running: false,
+          finishedAt: new Date().toISOString(),
+          error: spawned.error,
+          lastMessage: spawned.error,
+        });
+        return { ok: false, error: spawned.error };
+      }
+
+      this.latch.setChild(spawned.child);
+      this.setStatus({ pid: spawned.child.pid ?? null });
 
       this.emitLog({
         type: "grok_farm_started",
@@ -220,83 +169,17 @@ class GrokFarmQueue {
         data: { target: count, concurrent },
       });
 
-      let buf = "";
-      const onData = (chunk: Buffer) => {
-        buf += chunk.toString("utf8");
-        const lines = buf.split(/\r?\n/);
-        buf = lines.pop() || "";
-        for (const line of lines) this.handleLine(line);
-      };
-      child.stdout?.on("data", onData);
-      child.stderr?.on("data", onData);
-
-      child.on("error", (err) => {
-        this.child = null;
-        this.startLock = false;
-        this.setStatus({
-          running: false,
-          finishedAt: new Date().toISOString(),
-          error: err.message,
-          lastMessage: `spawn error: ${err.message}`,
-        });
-        this.emitLog({
-          type: "grok_farm_failed",
-          step: "spawn",
-          message: `spawn error: ${err.message}`,
-          error: err.message,
-        });
-      });
-
-      child.on("close", (code) => {
-        this.child = null;
-        this.startLock = false;
-        pool.invalidate("grok-cli" as any);
-        const ok = code === 0;
-        this.setStatus({
-          running: false,
-          finishedAt: new Date().toISOString(),
-          lastMessage: ok ? "farm finished" : `farm exit ${code}`,
-          // Clear stale error on success (parity with reauth queue).
-          error: ok ? null : `exit ${code}`,
-        });
-        this.emitLog({
-          type: ok ? "grok_farm_complete" : "grok_farm_failed",
-          step: "complete",
-          message: ok
-            ? `Farm complete: ${this.status.success} ok, ${this.status.failed} fail / ${this.status.target}`
-            : `Farm exited ${code}: ${this.status.success} ok, ${this.status.failed} fail`,
-          error: !ok ? `exit ${code}` : undefined,
-          data: this.getStatus(),
-        });
-        // Only broadcast complete on success — Bot Logs used to rank complete as green
-        // even after grok_farm_failed (false "success" badge next to "exit 2").
-        if (ok) {
-          broadcast({ type: "grok_farm_complete", data: this.getStatus() });
-          if (this.status.success > 0) {
-            broadcast({
-              type: "accounts_bulk_created",
-              data: { count: this.status.success, provider: "grok-cli" },
-            });
-          }
-        } else {
-          broadcast({ type: "grok_farm_failed", data: this.getStatus() });
-        }
-      });
-
       broadcast({ type: "grok_farm_started", data: this.getStatus() });
       return { ok: true, status: this.getStatus() };
     } catch (err) {
-      this.startLock = false;
-      this.child = null;
+      this.latch.forceClear();
+      const message = err instanceof Error ? err.message : String(err);
       this.setStatus({
         running: false,
         finishedAt: new Date().toISOString(),
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
+      return { ok: false, error: message };
     }
   }
 
@@ -313,13 +196,20 @@ class GrokFarmQueue {
       this.setStatus({
         success: p.success,
         failed: p.failed,
+        ...(p.pushFailures != null ? { pushFailures: p.pushFailures } : {}),
         lastMessage: line.trim().slice(0, 200),
       });
       this.emitLog({
         type: "grok_farm_progress",
         step: "summary",
-        message: `Summary: ${p.success} ok, ${p.failed} fail`,
-        data: { success: p.success, failed: p.failed },
+        message: `Summary: ${p.success} ok, ${p.failed} fail${
+          p.pushFailures != null ? `, ${p.pushFailures} push_fail` : ""
+        }`,
+        data: {
+          success: p.success,
+          failed: p.failed,
+          pushFailures: p.pushFailures,
+        },
       });
       return;
     }
@@ -338,7 +228,9 @@ class GrokFarmQueue {
     if (p.kind === "step") {
       if (p.email) this.attemptEmail.set(p.attempt, p.email);
       const email = p.email || this.attemptEmail.get(p.attempt);
-      this.setStatus({ lastMessage: `#${p.attempt} ${p.step}${email ? ` ${email}` : ""}`.slice(0, 200) });
+      this.setStatus({
+        lastMessage: `#${p.attempt} ${p.step}${email ? ` ${email}` : ""}`.slice(0, 200),
+      });
       this.emitLog({
         type: "grok_farm_progress",
         email,
@@ -389,7 +281,10 @@ class GrokFarmQueue {
     }
 
     if (p.kind === "progress") {
-      this.setStatus({ lastMessage: p.message, error: /ERROR/i.test(p.message) ? p.message : this.status.error });
+      this.setStatus({
+        lastMessage: p.message,
+        error: /ERROR/i.test(p.message) ? p.message : this.status.error,
+      });
       this.emitLog({
         type: "grok_farm_progress",
         step: "info",
@@ -400,17 +295,18 @@ class GrokFarmQueue {
   }
 
   stop(): { ok: true } | { ok: false; error: string } {
-    if (!this.child) return { ok: false, error: "No farm process running" };
-    try {
-      this.child.kill();
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-    this.child = null;
+    const child = this.latch.currentChild;
+    const killed = killGrokFarmChild(child);
+    if (!killed.ok) return killed;
+
+    // Terminal status immediately (same for farm + reauth).
+    this.latch.forceClear();
     this.setStatus({
       running: false,
       finishedAt: new Date().toISOString(),
       lastMessage: "stopped by user",
+      error: "stopped",
+      pid: null,
     });
     this.emitLog({
       type: "grok_farm_failed",

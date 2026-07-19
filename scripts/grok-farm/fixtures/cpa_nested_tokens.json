@@ -1,0 +1,11 @@
+{
+  "email": "farm-nested@example.com",
+  "password": "secret-pw",
+  "tokens": {
+    "access_token": "at-nested",
+    "refresh_token": "rt-nested",
+    "id_token": "idt-nested",
+    "expires_at": "2026-07-17T12:00:00Z",
+    "client_id": "b1a00492-073a-47ea-816f-4c329264a828"
+  }
+}

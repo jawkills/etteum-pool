@@ -71,6 +71,36 @@ describe("normalizeGrokCliCpa", () => {
     expect(out.sub).toBe("user-1");
     expect(out.team_id).toBe("team-9");
   });
+
+  test("accepts farm fixture nested shape (etteum_push account_to_import_item)", () => {
+    // Mirrors scripts/grok-farm/fixtures/cpa_nested_tokens.json
+    const out = normalizeGrokCliCpa({
+      email: "farm-nested@example.com",
+      password: "secret-pw",
+      tokens: {
+        access_token: "at-nested",
+        refresh_token: "rt-nested",
+        id_token: "idt-nested",
+        expires_at: "2026-07-17T12:00:00Z",
+        client_id: "b1a00492-073a-47ea-816f-4c329264a828",
+      },
+    });
+    expect(out.email).toBe("farm-nested@example.com");
+    expect(out.access_token).toBe("at-nested");
+    expect(out.refresh_token).toBe("rt-nested");
+  });
+
+  test("accepts farm fixture flat shape", () => {
+    const out = normalizeGrokCliCpa({
+      email: "farm-flat@example.com",
+      access_token: "at-flat",
+      refresh_token: "rt-flat",
+      id_token: "idt-flat",
+      expires_at: "2026-07-17T12:00:00Z",
+    });
+    expect(out.access_token).toBe("at-flat");
+    expect(out.refresh_token).toBe("rt-flat");
+  });
 });
 
 describe("grokCliOwnsModel", () => {
