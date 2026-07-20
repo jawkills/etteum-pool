@@ -32,9 +32,15 @@ import {
   fetchGrokFarmStatus,
   startGrokFarm,
   stopGrokFarm,
+  fetchCodeBuddyFarmStatus,
+  startCodeBuddyFarm,
+  stopCodeBuddyFarm,
+  fetchCodeBuddyFarmSettings,
+  exportGithubInventory, // used by github inventory card
   startGrokReauth,
   stopGrokReauth,
   type GrokFarmStatus,
+  type CodeBuddyFarmStatus,
   loginAccounts,
   loginAllAccounts,
   refreshAccountTokensBulk,
@@ -50,7 +56,7 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok";
+type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind" | "grok" | "github";
 
 type ByokFormKey = {
   id?: number;
@@ -70,12 +76,13 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind", "grok"];
+const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind", "grok", "github"];
 
 function labelProvider(provider: string) {
   if (provider === "kiro-pro") return "Kiro Pro";
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
+  if (provider === "github") return "GitHub";
   if (provider === "codex") return "Codex";
   if (provider === "qoder") return "Qoder";
   if (provider === "gitlab-duo") return "GitLab Duo";
@@ -121,6 +128,11 @@ export default function Accounts() {
   const [farmConcurrent, setFarmConcurrent] = useState(2);
   const [farmStatus, setFarmStatus] = useState<GrokFarmStatus | null>(null);
   const [farmBusy, setFarmBusy] = useState(false);
+  const [codebuddyMode, setCodebuddyMode] = useState<"farm" | "apikey" | "bulk" | "single" | "pat">("farm");
+  const [cbFarmCount, setCbFarmCount] = useState(1);
+  const [cbFarmConcurrent, setCbFarmConcurrent] = useState(1);
+  const [cbFarmStatus, setCbFarmStatus] = useState<CodeBuddyFarmStatus | null>(null);
+  const [cbFarmBusy, setCbFarmBusy] = useState(false);
   const [codebuddyBulkApiKeys, setCodebuddyBulkApiKeys] = useState("");
   const [codebuddyApiKeyBusy, setCodebuddyApiKeyBusy] = useState(false);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
@@ -314,6 +326,31 @@ export default function Accounts() {
     }
   );
 
+  useWsEvent(
+    [
+      "codebuddy_farm_status",
+      "codebuddy_farm_started",
+      "codebuddy_farm_complete",
+      "codebuddy_farm_progress",
+      "codebuddy_farm_success",
+      "codebuddy_farm_failed",
+    ],
+    (msg) => {
+      if (
+        msg.type === "codebuddy_farm_status" ||
+        msg.type === "codebuddy_farm_started" ||
+        msg.type === "codebuddy_farm_complete"
+      ) {
+        if (msg.data && typeof (msg.data as any).running === "boolean") {
+          setCbFarmStatus(msg.data as CodeBuddyFarmStatus);
+        }
+      }
+      if (msg.type === "codebuddy_farm_complete" || msg.type === "codebuddy_farm_success") {
+        load().catch(() => {});
+      }
+    }
+  );
+
   // Reauth refreshes existing rows — reload list without inventing "created" accounts.
   useWsEvent(
     ["grok_reauth_complete", "grok_reauth_success", "accounts_updated"],
@@ -355,6 +392,43 @@ export default function Accounts() {
       clearInterval(id);
     };
   }, [addDialogProvider, farmStatus?.running]);
+
+  useEffect(() => {
+    const dialogOpen = addDialogProvider === "codebuddy";
+    const running = cbFarmStatus?.running === true;
+    if (!dialogOpen && !running) {
+      if (!cbFarmStatus) {
+        fetchCodeBuddyFarmStatus()
+          .then((res: any) => { if (res?.data) setCbFarmStatus(res.data); })
+          .catch(() => {});
+      }
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetchCodeBuddyFarmStatus() as { data?: CodeBuddyFarmStatus };
+        if (!cancelled && res?.data) setCbFarmStatus(res.data);
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [addDialogProvider, cbFarmStatus?.running]);
+
+  useEffect(() => {
+    if (addDialogProvider !== "codebuddy") return;
+    fetchCodeBuddyFarmSettings()
+      .then((res: any) => {
+        const d = res?.data?.defaults;
+        if (d?.count) setCbFarmCount(Number(d.count) || 1);
+        if (d?.concurrent) setCbFarmConcurrent(Number(d.concurrent) || 1);
+      })
+      .catch(() => {});
+  }, [addDialogProvider]);
 
   async function handleToggleAutoWarmup(provider: Provider) {
     const key = `auto_warmup_provider_${provider}`;
@@ -527,6 +601,30 @@ export default function Accounts() {
       showSuccess("Grok farm stop requested");
     } catch (err) { showError(err); }
     finally { setFarmBusy(false); }
+  }
+
+  async function handleCodeBuddyFarmStart() {
+    const count = Math.max(1, Math.floor(cbFarmCount) || 1);
+    const concurrent = Math.max(1, Math.floor(cbFarmConcurrent) || 1);
+    setCbFarmBusy(true);
+    try {
+      const res = await startCodeBuddyFarm({ count, concurrent }) as { data?: CodeBuddyFarmStatus };
+      if (res?.data) setCbFarmStatus(res.data);
+      showSuccess("CodeBuddy farm started — progress in Bot Logs");
+      setAddDialogProvider(null);
+      navigate("/bot-logs");
+    } catch (err) { showError(err); }
+    finally { setCbFarmBusy(false); }
+  }
+
+  async function handleCodeBuddyFarmStop() {
+    setCbFarmBusy(true);
+    try {
+      const res = await stopCodeBuddyFarm() as { data?: CodeBuddyFarmStatus };
+      if (res?.data) setCbFarmStatus(res.data);
+      showSuccess("CodeBuddy farm stop requested");
+    } catch (err) { showError(err); }
+    finally { setCbFarmBusy(false); }
   }
 
   async function handleCodeBuddyBulkApiKey(provider: "codebuddy" | "codebuddy-china") {
@@ -770,6 +868,15 @@ export default function Accounts() {
     }
   }
 
+  async function handleExportGithub(includePassword = false) {
+    try {
+      await exportGithubInventory({ format: "txt", includePassword });
+      showSuccess(includePassword ? "Exported GitHub inventory (with passwords)" : "Exported GitHub inventory");
+    } catch (err) {
+      showError(err);
+    }
+  }
+
   function handleOpenAddDialog(provider: Provider) {
     resetCodexOAuthFlow();
     if (provider === "codex") {
@@ -790,6 +897,7 @@ export default function Accounts() {
       setAddMode("apikey");
     }
     if (provider === "codebuddy") {
+      setCodebuddyMode("farm");
       setAddMode("bulk");
     }
     setAddDialogProvider(provider);
@@ -1159,6 +1267,31 @@ export default function Accounts() {
         </div>
       )}
 
+      {/* CodeBuddy farm banner */}
+      {cbFarmStatus?.running && (
+        <div className="rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3 text-xs text-[var(--foreground)] space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong>CodeBuddy Farm</strong>
+              <span className="text-[var(--muted-foreground)] ml-2">
+                {cbFarmStatus.success}/{cbFarmStatus.target} ok
+                {cbFarmStatus.failed > 0 ? ` · ${cbFarmStatus.failed} fail` : ""}
+                {cbFarmStatus.concurrent > 0 ? ` · conc ${cbFarmStatus.concurrent}` : ""}
+              </span>
+            </div>
+            <Button size="sm" variant="outline" onClick={handleCodeBuddyFarmStop} disabled={cbFarmBusy}>
+              Stop
+            </Button>
+          </div>
+          <Progress
+            value={cbFarmStatus.target > 0 ? Math.round(((cbFarmStatus.success + cbFarmStatus.failed) / cbFarmStatus.target) * 100) : 0}
+          />
+          {cbFarmStatus.lastMessage && (
+            <p className="text-[var(--muted-foreground)] break-all">{cbFarmStatus.lastMessage}</p>
+          )}
+        </div>
+      )}
+
       {/* Grok farm banner — same surface as login queue */}
       {farmStatus?.running && (
         <div className="rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3 text-xs text-[var(--foreground)] space-y-2">
@@ -1271,7 +1404,8 @@ export default function Accounts() {
                 </div>
               )}
 
-              {/* Auto WarmUp toggle + countdown */}
+              {/* Auto WarmUp toggle + countdown (not for github inventory) */}
+              {stat.provider !== "github" && (
               <div
                 className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--secondary)]/40 p-2"
                 onClick={(e) => e.stopPropagation()}
@@ -1304,41 +1438,71 @@ export default function Accounts() {
                   />
                 </button>
               </div>
+              )}
 
               {/* Buttons */}
               <div className="grid grid-cols-3 gap-2" onClick={(e) => e.stopPropagation()}>
-                <Button className="w-full" variant="default" size="sm" onClick={() => handleOpenAddDialog(stat.provider)}>
-                  <Plus className="mr-1 h-4 w-4" /> Add
-                </Button>
-                <Button className="w-full" variant="outline" size="sm" onClick={() => handleWarmupProvider(stat.provider)} disabled={Boolean(warmupProgress[stat.provider])}>
-                  <RefreshCw className="mr-1 h-4 w-4" /> Warmup
-                </Button>
-                {stat.provider === "grok" ? (
-                  <div className="col-span-3 grid grid-cols-2 gap-2">
+                {stat.provider === "github" ? (
+                  <>
                     <Button
-                      className="w-full"
-                      variant="outline"
+                      className="w-full col-span-2"
+                      variant="default"
                       size="sm"
-                      onClick={() => handleGrokRefreshTokens()}
-                      title="Force OAuth refresh_token (server bulk, max 50). Permanent invalid_grant is skipped/marked dead; missing-token accounts stay reauthable."
+                      onClick={() => handleExportGithub(false)}
+                      title="Export email|username|country|sessid (no passwords)"
                     >
-                      <RotateCcw className="mr-1 h-4 w-4" /> Refresh tok
+                      <Upload className="mr-1 h-4 w-4" /> Export
                     </Button>
                     <Button
                       className="w-full"
                       variant="outline"
                       size="sm"
-                      onClick={() => handleGrokReauthDead()}
-                      disabled={stat.error === 0}
-                      title="Re-login dead accounts with stored password (or GROK_PASSWORD). Farm = create new accounts; Reauth = revive existing. Needs real password (not grok-cli-token-auth placeholder)."
+                      onClick={() => {
+                        if (confirm("Export GitHub inventory INCLUDING passwords? Keep the file private.")) {
+                          handleExportGithub(true);
+                        }
+                      }}
+                      title="Export with passwords"
                     >
-                      <RotateCcw className="mr-1 h-4 w-4" /> Reauth dead
+                      <Key className="mr-1 h-4 w-4" /> +PW
                     </Button>
-                  </div>
+                  </>
                 ) : (
-                  <Button className="w-full" variant="outline" size="sm" onClick={() => handleRetryErrors(stat.provider)} disabled={stat.error === 0}>
-                    <RotateCcw className="mr-1 h-4 w-4" /> Retry
-                  </Button>
+                  <>
+                    <Button className="w-full" variant="default" size="sm" onClick={() => handleOpenAddDialog(stat.provider)}>
+                      <Plus className="mr-1 h-4 w-4" /> Add
+                    </Button>
+                    <Button className="w-full" variant="outline" size="sm" onClick={() => handleWarmupProvider(stat.provider)} disabled={Boolean(warmupProgress[stat.provider])}>
+                      <RefreshCw className="mr-1 h-4 w-4" /> Warmup
+                    </Button>
+                    {stat.provider === "grok" ? (
+                      <div className="col-span-3 grid grid-cols-2 gap-2">
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleGrokRefreshTokens()}
+                          title="Force OAuth refresh_token (server bulk, max 50). Permanent invalid_grant is skipped/marked dead; missing-token accounts stay reauthable."
+                        >
+                          <RotateCcw className="mr-1 h-4 w-4" /> Refresh tok
+                        </Button>
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleGrokReauthDead()}
+                          disabled={stat.error === 0}
+                          title="Re-login dead accounts with stored password (or GROK_PASSWORD). Farm = create new accounts; Reauth = revive existing. Needs real password (not grok-cli-token-auth placeholder)."
+                        >
+                          <RotateCcw className="mr-1 h-4 w-4" /> Reauth dead
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button className="w-full" variant="outline" size="sm" onClick={() => handleRetryErrors(stat.provider)} disabled={stat.error === 0}>
+                        <RotateCcw className="mr-1 h-4 w-4" /> Retry
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </CardContent>
@@ -1709,6 +1873,8 @@ export default function Accounts() {
                 ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
                 : addDialogProvider === "codebuddy-china"
                 ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
+                : addDialogProvider === "codebuddy"
+                ? "HTTP farm (iCloud HME → GitHub → mint ck_) or paste keys / session. Needs HME + DataDome solver + DataImpulse."
                 : addDialogProvider === "grok"
                 ? "HTTP farm (no browser) or paste CPA JSON import. Farm needs Boterdrop :8000 + tempmail; auto-imports to pool."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
@@ -1777,19 +1943,22 @@ export default function Accounts() {
               >Bulk API Key (ck_...)</button>
             </div>
           ) : addDialogProvider === "codebuddy" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
-              <button onClick={() => setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Bulk (Email|Pass)</button>
-              <button onClick={() => setAddMode("single")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1 flex-wrap">
+              <button onClick={() => setCodebuddyMode("farm")}
+                className={`flex-1 min-w-[4.5rem] rounded px-3 py-1.5 text-xs font-medium transition-colors ${codebuddyMode === "farm" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Farm</button>
+              <button onClick={() => { setCodebuddyMode("apikey"); setAddMode("apikey"); }}
+                className={`flex-1 min-w-[4.5rem] rounded px-3 py-1.5 text-xs font-medium transition-colors ${codebuddyMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >API Keys</button>
+              <button onClick={() => { setCodebuddyMode("bulk"); setAddMode("bulk"); }}
+                className={`flex-1 min-w-[4.5rem] rounded px-3 py-1.5 text-xs font-medium transition-colors ${codebuddyMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Bulk</button>
+              <button onClick={() => { setCodebuddyMode("single"); setAddMode("single"); }}
+                className={`flex-1 min-w-[4.5rem] rounded px-3 py-1.5 text-xs font-medium transition-colors ${codebuddyMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
               >Single</button>
-              <button onClick={() => setAddMode("apikey")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Bulk API Key (ck_...)</button>
-              <button onClick={() => setAddMode("pat")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Session / JWT</button>
+              <button onClick={() => { setCodebuddyMode("pat"); setAddMode("pat"); }}
+                className={`flex-1 min-w-[4.5rem] rounded px-3 py-1.5 text-xs font-medium transition-colors ${codebuddyMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+              >Session</button>
             </div>
           ) : (
             <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
@@ -2016,7 +2185,77 @@ export default function Accounts() {
             </div>
           )}
 
-          {addMode === "apikey" && (addDialogProvider === "codebuddy-china" || addDialogProvider === "codebuddy") && (
+          {addDialogProvider === "codebuddy" && codebuddyMode === "farm" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
+                <div><strong>HTTP farm</strong> — iCloud HME → sticky GitHub → pure-HTTP OAuth → mint <code>ck_</code>.</div>
+                <div className="text-[var(--muted-foreground)]">
+                  Config: <strong>Settings → CodeBuddy Farm</strong> (preferred) or <code>scripts/codebuddy-farm/.env</code>.
+                  Each GH account is saved to inventory provider <code>github</code>. Progress in <strong>Bot Logs</strong>.
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm text-[var(--foreground)]">Count</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={cbFarmCount}
+                    onChange={(e) => setCbFarmCount(Number(e.target.value) || 1)}
+                    className="mt-1"
+                    disabled={cbFarmBusy || cbFarmStatus?.running}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-[var(--foreground)]">Concurrent</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={cbFarmConcurrent}
+                    onChange={(e) => setCbFarmConcurrent(Number(e.target.value) || 1)}
+                    className="mt-1"
+                    disabled={cbFarmBusy || cbFarmStatus?.running}
+                  />
+                  <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">Prefer 1 (sticky IP stability)</p>
+                </div>
+              </div>
+              {cbFarmStatus && (
+                <div className="rounded-md border border-[var(--border)] p-2 text-xs space-y-1">
+                  <div>
+                    Status: {cbFarmStatus.running ? "running" : "idle"} · {cbFarmStatus.success}/{cbFarmStatus.target} ok
+                    {cbFarmStatus.failed ? ` · ${cbFarmStatus.failed} fail` : ""}
+                  </div>
+                  {cbFarmStatus.lastMessage && (
+                    <p className="text-[var(--muted-foreground)] break-all">{cbFarmStatus.lastMessage}</p>
+                  )}
+                  {cbFarmStatus.error && (
+                    <p className="text-xs text-red-500 break-all">{cbFarmStatus.error}</p>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={cbFarmBusy}>
+                  Cancel
+                </Button>
+                {cbFarmStatus?.running && (
+                  <Button variant="outline" onClick={handleCodeBuddyFarmStop} disabled={cbFarmBusy}>
+                    Stop
+                  </Button>
+                )}
+                <Button onClick={handleCodeBuddyFarmStart} disabled={cbFarmBusy || cbFarmStatus?.running}>
+                  {cbFarmBusy || cbFarmStatus?.running ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Running...</>
+                  ) : (
+                    "Start Farm"
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "apikey" && (addDialogProvider === "codebuddy-china" || (addDialogProvider === "codebuddy" && codebuddyMode === "apikey")) && (
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-[var(--foreground)]">API Keys (satu per baris, prefix ck_)</label>
@@ -2056,7 +2295,7 @@ ck_xyz789ghi012..."
             </div>
           )}
 
-          {addMode === "pat" && addDialogProvider === "codebuddy" && (
+          {addMode === "pat" && addDialogProvider === "codebuddy" && codebuddyMode === "pat" && (
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-[var(--foreground)]">Session / JWT / auth.info JSON</label>
@@ -2182,7 +2421,7 @@ eyJhbGciOi...
           )}
 
           {/* Bulk mode (all providers except Grok JSON import) */}
-          {addMode === "bulk" && addDialogProvider !== "grok" && (
+          {addMode === "bulk" && addDialogProvider !== "grok" && !(addDialogProvider === "codebuddy" && codebuddyMode === "farm") && (
             <div className="space-y-4">
               {addDialogProvider === "gitlab-duo" && (
                 <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
@@ -2230,7 +2469,7 @@ eyJhbGciOi...
           )}
 
           {/* Single mode (all providers) */}
-          {addMode === "single" && (
+          {addMode === "single" && !(addDialogProvider === "codebuddy" && codebuddyMode === "farm") && (
             <div className="space-y-4">
               {addDialogProvider === "gitlab-duo" && (
                 <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">

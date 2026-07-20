@@ -39,6 +39,17 @@ export default function Settings() {
     // Grok runtime — keep defaults in sync with grok/settings.ts
     grok_refresh_lead_sec: String(45 * 60),
     grok_max_account_retries: "8",
+    // CodeBuddy farm (inject into scripts/codebuddy-farm)
+    "codebuddy_farm.hme_url": "http://127.0.0.1:8081",
+    "codebuddy_farm.hme_account": "acc_main",
+    "codebuddy_farm.captcha_solver_url": "http://127.0.0.1:8877",
+    "codebuddy_farm.di_login": "",
+    "codebuddy_farm.di_password": "",
+    "codebuddy_farm.di_host": "gw.dataimpulse.com:823",
+    "codebuddy_farm.di_countries": "sg,us,de,nl,id,th,vn,jp",
+    "codebuddy_farm.di_sessttl": "15",
+    "codebuddy_farm.default_count": "1",
+    "codebuddy_farm.default_concurrent": "1",
     // Compression defaults — keep in sync with DEFAULT_COMPRESSION_CONFIG.
     compression_rtk_enabled: "true",
     compression_rtk_max_tool_chars: "4000",
@@ -98,7 +109,12 @@ export default function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await updateSettings(form);
+      // Do not wipe DI password when the field is left blank after reload.
+      const payload = { ...form };
+      if (!String(payload["codebuddy_farm.di_password"] || "").trim()) {
+        delete payload["codebuddy_farm.di_password"];
+      }
+      await updateSettings(payload);
       setSavedAt(new Date());
       setDirty(false);
       setMessage("Settings saved.");
@@ -333,6 +349,118 @@ export default function Settings() {
               <p className="text-xs text-[var(--muted-foreground)]">
                 How many different Grok accounts the router tries per request before giving up. Higher helps large farms with many dead tokens still marked active. Default 8.
               </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* CodeBuddy Farm */}
+        <Card className="border-[var(--border)] lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Flame className="w-4 h-4 text-[var(--primary)]" />
+              CodeBuddy Farm
+            </CardTitle>
+            <CardDescription>
+              iCloud HME + DataImpulse + DataDome solver for HTTP farm. Values inject into the farm process
+              (override <code className="text-xs">scripts/codebuddy-farm/.env</code>). GitHub accounts are
+              saved as inventory provider <code className="text-xs">github</code>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">HME URL</label>
+              <Input
+                value={form["codebuddy_farm.hme_url"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.hme_url", e.target.value)}
+                placeholder="http://127.0.0.1:8081"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">HME account id</label>
+              <Input
+                value={form["codebuddy_farm.hme_account"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.hme_account", e.target.value)}
+                placeholder="acc_main"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">Captcha solver URL</label>
+              <Input
+                value={form["codebuddy_farm.captcha_solver_url"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.captcha_solver_url", e.target.value)}
+                placeholder="http://127.0.0.1:8877"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">DI host</label>
+              <Input
+                value={form["codebuddy_farm.di_host"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.di_host", e.target.value)}
+                placeholder="gw.dataimpulse.com:823"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">DI login</label>
+              <Input
+                value={form["codebuddy_farm.di_login"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.di_login", e.target.value)}
+                placeholder="DataImpulse login id"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">DI password</label>
+              <Input
+                type="password"
+                value={form["codebuddy_farm.di_password"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.di_password", e.target.value)}
+                placeholder="leave blank to keep existing / use .env"
+                autoComplete="new-password"
+              />
+              <p className="text-xs text-[var(--muted-foreground)]">
+                Saving a non-empty value overwrites stored password. Clear field + save other keys to leave password unchanged only if bulk save skips empty — re-enter when rotating.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">DI countries</label>
+              <Input
+                value={form["codebuddy_farm.di_countries"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.di_countries", e.target.value)}
+                placeholder="sg,us,de,nl,id,th,vn,jp"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">DI session TTL (min)</label>
+              <Input
+                type="number"
+                min={1}
+                max={120}
+                value={form["codebuddy_farm.di_sessttl"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.di_sessttl", e.target.value)}
+                placeholder="15"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">Default farm count</label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={form["codebuddy_farm.default_count"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.default_count", e.target.value)}
+                placeholder="1"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--foreground)]">Default concurrent</label>
+              <Input
+                type="number"
+                min={1}
+                max={5}
+                value={form["codebuddy_farm.default_concurrent"] || ""}
+                onChange={(e) => setValue("codebuddy_farm.default_concurrent", e.target.value)}
+                placeholder="1"
+              />
             </div>
           </CardContent>
         </Card>

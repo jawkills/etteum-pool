@@ -440,6 +440,55 @@ function Setup-GrokFarmVenv {
     }
 }
 
+function Setup-CodeBuddyFarmVenv {
+    # In-tree CodeBuddy HTTP farm. External: HME service, DataDome solver, DataImpulse.
+    $venv = Join-Path (Join-Path "scripts" "codebuddy-farm") ".venv"
+    $venvPip = Join-Path (Join-Path $venv "Scripts") "pip.exe"
+    $venvPy  = Join-Path (Join-Path $venv "Scripts") "python.exe"
+    $req = Join-Path (Join-Path "scripts" "codebuddy-farm") "requirements.txt"
+    $envExample = Join-Path (Join-Path "scripts" "codebuddy-farm") ".env.example"
+    $envFile = Join-Path (Join-Path "scripts" "codebuddy-farm") ".env"
+
+    if (-not (Test-Path $req)) {
+        Warn "scripts/codebuddy-farm not found - skipping CodeBuddy farm venv"
+        return
+    }
+
+    Step "Setting up CodeBuddy HTTP farm venv at $venv"
+
+    if (-not (Test-Path $venv)) {
+        Info "Creating CodeBuddy farm virtual environment..."
+        & $script:PythonBin -m venv $venv
+        if ($LASTEXITCODE -ne 0) {
+            Warn "Failed to create CodeBuddy farm venv"
+            return
+        }
+    }
+
+    if (-not (Test-Path $venvPy)) {
+        Warn "CodeBuddy farm venv incomplete - missing $venvPy"
+        return
+    }
+
+    Info "Installing CodeBuddy farm Python packages (curl_cffi)..."
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $venvPy -m pip install --upgrade pip wheel 2>&1 | Out-Null
+    $ErrorActionPreference = $prevEap
+    Retry-Action -Action { & $venvPy -m pip install -r $req }
+    if ($LASTEXITCODE -ne 0) {
+        Warn "CodeBuddy farm pip install failed. Manual: $venvPip install -r $req"
+        return
+    }
+    Ok "CodeBuddy farm Python deps installed"
+
+    if ((-not (Test-Path $envFile)) -and (Test-Path $envExample)) {
+        Copy-Item $envExample $envFile
+        Warn "Created scripts/codebuddy-farm/.env - set DI_LOGIN/DI_PASSWORD + ICLOUD_HME_URL + CAPTCHA_SOLVER_URL"
+        Info "  External: iCloud HME, DataDome solver, DataImpulse sticky proxy"
+    }
+}
+
 function Setup-PythonVenv {
     $venv = Join-Path (Join-Path "scripts" "auth") ".venv"
     $venvPip = Join-Path (Join-Path $venv "Scripts") "pip.exe"
@@ -596,6 +645,7 @@ function Main {
     Install-NodeDeps
     Setup-PythonVenv
     Setup-GrokFarmVenv
+    Setup-CodeBuddyFarmVenv
     Build-Dashboard
     Run-Migrations
     Install-CliShims

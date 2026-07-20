@@ -22,6 +22,7 @@ from farm_env import (
     ETTEUM_API_KEY,
     ETTEUM_URL,
     GROK_PUSH_MODE,
+    MAIL_KEY,
     MAX_ACCOUNTS,
     PROXY_FILE,
     RESULTS_ROOT,

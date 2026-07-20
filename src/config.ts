@@ -135,6 +135,14 @@ export const config = {
   grokFarmDir: process.env.GROK_FARM_DIR || path.join(projectRoot, "scripts/grok-farm"),
   grokFarmPython: process.env.GROK_FARM_PYTHON || "py",
   grokFarmPythonArgs: (process.env.GROK_FARM_PYTHON_ARGS || "-3").split(/\s+/).filter(Boolean),
+  // CodeBuddy HTTP farm — in-tree scripts/codebuddy-farm (HME + GH + mint ck_).
+  // External: iCloud HME service, DataDome solver, DataImpulse creds in farm .env.
+  codebuddyFarmDir:
+    process.env.CODEBUDDY_FARM_DIR || path.join(projectRoot, "scripts/codebuddy-farm"),
+  codebuddyFarmPython: process.env.CODEBUDDY_FARM_PYTHON || "py",
+  codebuddyFarmPythonArgs: (process.env.CODEBUDDY_FARM_PYTHON_ARGS || "-3")
+    .split(/\s+/)
+    .filter(Boolean),
   // Providers listed for Settings / auto-warmup toggles (Accounts UI has its own full list).
   providers: [
     "kiro",

@@ -14,12 +14,18 @@ import { activateYouMindKey } from "../../proxy/providers/youmind";
 import { isPermanentRevocation, isPlaceholderPassword } from "../../proxy/account-health";
 import { proveAccountSession, applySessionProveResult } from "../../proxy/session-prove";
 import { registerGrokAccountRoutes } from "./grok";
+import { registerCodeBuddyFarmRoutes } from "./codebuddy-farm";
+import { registerGithubAccountRoutes } from "./github";
 import { tryCreateCodeBuddyAccount } from "./codebuddy";
 
 export const accountsRouter = new Hono();
 
 // Grok import / farm / reauth — dedicated module (stable /api/accounts/grok/* URLs).
 registerGrokAccountRoutes(accountsRouter);
+// CodeBuddy farm + import — /api/accounts/codebuddy/*
+registerCodeBuddyFarmRoutes(accountsRouter);
+// GitHub inventory (credentials only; not a model provider)
+registerGithubAccountRoutes(accountsRouter);
 
 type ByokKeyInput = {
   id?: number;

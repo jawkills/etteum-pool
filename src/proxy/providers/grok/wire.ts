@@ -31,6 +31,11 @@ import {
 import { normalizeGrokCliMessagesForOpenAI } from "./messages";
 import { parseGrokModelId, resolveGrokUpstreamModel } from "./models";
 import { buildGrokHeaders } from "./headers";
+import {
+  translateChatRequestToResponses,
+  translateResponsesSseToChatSse,
+  jsonResponsesToChatCompletion,
+} from "./responses";
 
 export type FetchWithTimeout = (
   url: string,
@@ -112,6 +117,20 @@ export function failGrokCliImage(
   };
 }
 
+/**
+ * Whether to use the OpenAI Responses API endpoint for Grok chat.
+ *
+ * Default: true. The legacy /chat/completions path on cli-chat-proxy.grok.com
+ * silently terminates after the reasoning phase for many interactive sessions,
+ * which surfaces to clients as "grok thinks then dies". The Responses API
+ * (/v1/responses) is the path the official grok-shell client and 9router use.
+ *
+ * Set GROK_CLI_USE_RESPONSES_API=false to fall back to the legacy endpoint
+ * (e.g. for emergency rollback without a redeploy).
+ */
+const USE_RESPONSES_API =
+  String(process.env.GROK_CLI_USE_RESPONSES_API ?? "true").toLowerCase() !== "false";
+
 export async function grokCliUpstreamChat(
   fetchWithTimeout: FetchWithTimeout,
   account: Account,
@@ -123,26 +142,32 @@ export async function grokCliUpstreamChat(
   const req = prepareGrokCliChatRequest(request);
   const parsed = parseGrokModelId(req.model);
   const model = parsed.upstream;
-  const body: Record<string, unknown> = {
-    ...req,
-    model,
-    stream: !!req.stream,
-  };
-  // Official grok-build rejects reasoningEffort; only attach for 4.5 family.
-  // Model-id effort (low/medium/high/xhigh) always wins over body.
-  if (parsed.effortFromModelId && parsed.effort) {
-    body.reasoning_effort = parsed.effort;
-  } else if (body.reasoning_effort != null || (body as any).reasoningEffort != null) {
-    const raw = String(body.reasoning_effort ?? (body as any).reasoningEffort).toLowerCase();
-    if (raw === "max") body.reasoning_effort = "xhigh";
+
+  // Build body in the wire format the active endpoint expects.
+  let endpointPath: string;
+  let bodyObj: Record<string, unknown>;
+  if (USE_RESPONSES_API) {
+    // Responses API: translate OpenAI Chat Completions request shape.
+    endpointPath = "/responses";
+    bodyObj = translateChatRequestToResponses(req) as unknown as Record<string, unknown>;
+  } else {
+    // Legacy fallback: original Chat Completions body construction.
+    endpointPath = "/chat/completions";
+    bodyObj = { ...req, model, stream: !!req.stream };
+    if (parsed.effortFromModelId && parsed.effort) {
+      bodyObj.reasoning_effort = parsed.effort;
+    } else if (bodyObj.reasoning_effort != null || (bodyObj as any).reasoningEffort != null) {
+      const raw = String(bodyObj.reasoning_effort ?? (bodyObj as any).reasoningEffort).toLowerCase();
+      if (raw === "max") bodyObj.reasoning_effort = "xhigh";
+    }
   }
 
   const response = await fetchWithTimeout(
-    `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
+    `${GROK_CLI_UPSTREAM_BASE}${endpointPath}`,
     {
       method: "POST",
       headers: buildGrokHeaders({ ...tokens, email: account.email }, req.model || model),
-      body: JSON.stringify(body),
+      body: JSON.stringify(bodyObj),
     },
     config.providerRequestTimeoutMs
   );
@@ -409,20 +434,43 @@ export async function grokCliChatCompletion(
     return { success: false, error: "Invalid JSON from Grok upstream" };
   }
 
-  const usage = data.usage || {};
-  const promptTokens = Number(usage.prompt_tokens) || 0;
-  const completionTokens = Number(usage.completion_tokens) || 0;
+  // Normalize the upstream response into OpenAI Chat Completions shape.
+  // Responses API returns { output, usage: { input_tokens, output_tokens } };
+  // the legacy Chat Completions path returns { choices, usage: { prompt_tokens } }.
+  let chat: ChatCompletionResponse;
+  if (USE_RESPONSES_API || Array.isArray(data.output)) {
+    chat = jsonResponsesToChatCompletion(data, request.model);
+  } else {
+    chat = {
+      id: data.id || generateId(),
+      object: "chat.completion",
+      created: data.created || Math.floor(Date.now() / 1000),
+      model: request.model,
+      choices: data.choices || [],
+      usage: {
+        prompt_tokens: Number(data.usage?.prompt_tokens) || 0,
+        completion_tokens: Number(data.usage?.completion_tokens) || 0,
+        total_tokens: Number(data.usage?.total_tokens) || 0,
+      },
+    };
+  }
+
+  const usage = chat.usage || {};
+  const promptTokens =
+    Number(usage.prompt_tokens) ||
+    Number((data.usage || {}).input_tokens) ||
+    0;
+  const completionTokens =
+    Number(usage.completion_tokens) ||
+    Number((data.usage || {}).output_tokens) ||
+    0;
   const total =
     Number(usage.total_tokens) ||
     promptTokens + completionTokens ||
     estimateMessagesTokens(request.messages);
 
   const resp: ChatCompletionResponse = {
-    id: data.id || generateId(),
-    object: "chat.completion",
-    created: data.created || Math.floor(Date.now() / 1000),
-    model: request.model,
-    choices: data.choices || [],
+    ...chat,
     usage: {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
@@ -477,9 +525,20 @@ export async function grokCliChatCompletionStream(
     );
   }
 
+  // When talking to the Responses API, the upstream SSE uses Responses event
+  // types (response.output_text.delta, response.reasoning_summary_text.delta,
+  // response.completed, ...). Wrap it in a translator so downstream consumers
+  // (wrapStreamWithUsageFinalizer, openAIStreamToAnthropic) still see standard
+  // OpenAI Chat Completions SSE chunks. The legacy endpoint already emits
+  // Chat Completions SSE so we pass it through unchanged.
+  const upstreamBody = response.body;
+  const stream = USE_RESPONSES_API && upstreamBody
+    ? translateResponsesSseToChatSse(upstreamBody, { model: request.model })
+    : upstreamBody;
+
   return {
     success: true,
-    stream: response.body,
+    stream,
     promptTokens: 0,
     completionTokens: 0,
     tokensUsed: 0,
@@ -534,20 +593,39 @@ export async function grokCliFetchQuota(
 
   const PROBE_MODEL = resolveGrokUpstreamModel("grok-4.5");
   try {
+    // Probe body mirrors the wire path the chat request actually uses, so the
+    // center treats it identically for credit/rate-limit accounting. The
+    // Responses endpoint requires `input` rather than `messages`.
+    const probeBody = USE_RESPONSES_API
+      ? {
+          model: PROBE_MODEL,
+          input: [
+            {
+              role: "user",
+              content: [{ type: "input_text", text: "1" }],
+            },
+          ],
+          stream: false,
+          store: false,
+          max_output_tokens: 1,
+          reasoning: { summary: "concise", effort: "low" },
+        }
+      : {
+          model: PROBE_MODEL,
+          messages: [{ role: "user", content: "1" }],
+          max_tokens: 1,
+          stream: false,
+        };
+
     const response = await fetchWithTimeout(
-      `${GROK_CLI_UPSTREAM_BASE}/chat/completions`,
+      `${GROK_CLI_UPSTREAM_BASE}${USE_RESPONSES_API ? "/responses" : "/chat/completions"}`,
       {
         method: "POST",
         headers: buildGrokHeaders(
           { ...tokens, email: account.email || tokens.email },
           PROBE_MODEL
         ),
-        body: JSON.stringify({
-          model: PROBE_MODEL,
-          messages: [{ role: "user", content: "1" }],
-          max_tokens: 1,
-          stream: false,
-        }),
+        body: JSON.stringify(probeBody),
       },
       config.providerQuotaTimeoutMs
     );

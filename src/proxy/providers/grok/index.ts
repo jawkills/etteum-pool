@@ -78,6 +78,13 @@ export {
   addGrokCliUsage,
 } from "./image";
 export { buildGrokHeaders, buildGrokCliHeaders } from "./headers";
+export {
+  type ResponsesApiRequest,
+  type ResponsesApiOutput,
+  translateChatRequestToResponses,
+  translateResponsesSseToChatSse,
+  jsonResponsesToChatCompletion,
+} from "./responses";
 
 import {
   GROK_CLI_TOKEN_LIMIT,

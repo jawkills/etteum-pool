@@ -479,6 +479,51 @@ setup_grok_farm_venv() {
   chmod +x scripts/grok-farm/run-http.sh 2>/dev/null || true
 }
 
+setup_codebuddy_farm_venv() {
+  # In-tree CodeBuddy HTTP farm. External: HME, DataDome solver, DataImpulse.
+  local venv_dir="scripts/codebuddy-farm/.venv"
+  local pip="$venv_dir/bin/pip"
+  local venv_python="$venv_dir/bin/python"
+  local req="scripts/codebuddy-farm/requirements.txt"
+  local env_example="scripts/codebuddy-farm/.env.example"
+  local env_file="scripts/codebuddy-farm/.env"
+
+  if [[ ! -f "$req" ]]; then
+    warn "scripts/codebuddy-farm not found - skipping CodeBuddy farm venv"
+    return
+  fi
+
+  step "Setting up CodeBuddy HTTP farm venv at $venv_dir"
+  ensure_venv_module
+
+  if [[ ! -d "$venv_dir" ]]; then
+    info "Creating CodeBuddy farm virtual environment..."
+    if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
+      warn "Failed to create CodeBuddy farm venv"
+      return
+    fi
+  fi
+
+  if [[ ! -f "$venv_python" || ! -f "$pip" ]]; then
+    warn "CodeBuddy farm venv incomplete - missing python/pip"
+    return
+  fi
+
+  info "Installing CodeBuddy farm Python packages (curl_cffi)..."
+  retry "$pip" install --upgrade pip wheel >/dev/null 2>&1 || true
+  if ! retry "$pip" install -r "$req"; then
+    warn "CodeBuddy farm pip install failed. Manual: $pip install -r $req"
+    return
+  fi
+  ok "CodeBuddy farm Python deps installed"
+
+  if [[ ! -f "$env_file" && -f "$env_example" ]]; then
+    cp "$env_example" "$env_file"
+    warn "Created scripts/codebuddy-farm/.env - set DI_LOGIN/DI_PASSWORD + ICLOUD_HME_URL + CAPTCHA_SOLVER_URL"
+    info "  External: iCloud HME, DataDome solver, DataImpulse sticky proxy"
+  fi
+}
+
 setup_python_venv() {
   local venv_dir="scripts/auth/.venv"
   local pip="$venv_dir/bin/pip"
@@ -618,6 +663,7 @@ main() {
   install_node_deps
   setup_python_venv
   setup_grok_farm_venv
+  setup_codebuddy_farm_venv
   build_dashboard
   run_migrations
   install_cli_symlink

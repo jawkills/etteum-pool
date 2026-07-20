@@ -512,6 +512,78 @@ export async function stopGrokFarm() {
   });
 }
 
+export type CodeBuddyFarmStatus = {
+  running: boolean;
+  target: number;
+  concurrent: number;
+  success: number;
+  failed: number;
+  pushFailures: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  batchDir: string | null;
+  lastMessage: string;
+  error: string | null;
+  pid: number | null;
+};
+
+export async function fetchCodeBuddyFarmStatus() {
+  return fetchApi(`/api/accounts/codebuddy/farm`);
+}
+
+export async function startCodeBuddyFarm(payload: { count: number; concurrent?: number }) {
+  return fetchApi(`/api/accounts/codebuddy/farm`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function stopCodeBuddyFarm() {
+  return fetchApi(`/api/accounts/codebuddy/farm/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchCodeBuddyFarmSettings() {
+  return fetchApi(`/api/accounts/codebuddy/farm/settings`);
+}
+
+/** Download GitHub inventory export (txt). includePassword requires explicit opt-in. */
+export async function exportGithubInventory(opts?: {
+  format?: "txt" | "json";
+  includePassword?: boolean;
+}): Promise<void> {
+  const format = opts?.format || "txt";
+  const includePassword = opts?.includePassword ? "1" : "0";
+  const path = `/api/accounts/github/export?format=${format}&include_password=${includePassword}`;
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${getApiKey()}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Export failed: ${res.status}`);
+  }
+  if (format === "json") {
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = includePassword === "1" ? "github-inventory.secrets.json" : "github-inventory.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = includePassword === "1" ? "github-inventory.secrets.txt" : "github-inventory.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export type GrokReauthStatus = {
   running: boolean;
   target: number;
