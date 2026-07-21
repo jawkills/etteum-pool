@@ -18,6 +18,7 @@ import {
   parseGrokCliExhaustedBody,
   normalizeGrokCliMessagesForOpenAI,
   grokCliContentBlocksToText,
+  parseRetryAfterMs,
   GROK_CLI_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
   GROK_CLI_CREDIT_SOFT_ERROR,
@@ -212,8 +213,100 @@ describe("classifyGrokCliError", () => {
   test("401 generic => auth", () => {
     expect(classifyGrokCliError(401, "unauthorized")).toBe("auth");
   });
-  test("other => null", () => {
+  test("500 still => null (unchanged)", () => {
     expect(classifyGrokCliError(500, "boom")).toBe(null);
+  });
+
+  // --- capacity / rate_limited (transient upstream overload) ---
+  test("529 capacity message => rate_limited", () => {
+    expect(
+      classifyGrokCliError(
+        529,
+        "The model is currently at capacity due to high demand. Please try again in a few minutes, or use a higher service tier for priority processing: https://docs.x.ai/developers/advanced-api-usage/priority-processing"
+      )
+    ).toBe("rate_limited");
+  });
+  test("503 service unavailable => rate_limited", () => {
+    expect(classifyGrokCliError(503, "Service Unavailable")).toBe("rate_limited");
+  });
+  test("503 with capacity body => rate_limited", () => {
+    expect(classifyGrokCliError(503, "at capacity due to high demand")).toBe("rate_limited");
+  });
+  test("429 capacity body (no quota markers) => rate_limited, NOT exhausted", () => {
+    expect(
+      classifyGrokCliError(429, "at capacity due to high demand")
+    ).toBe("rate_limited");
+  });
+  test("429 rate limit exceeded text => rate_limited", () => {
+    expect(classifyGrokCliError(429, "rate limit exceeded")).toBe("rate_limited");
+  });
+  test("429 too many requests text => rate_limited", () => {
+    expect(classifyGrokCliError(429, "too many requests")).toBe("rate_limited");
+  });
+  test("overloaded text at any status => rate_limited", () => {
+    expect(classifyGrokCliError(200, "The model is overloaded")).toBe("rate_limited");
+  });
+  test("temporarily unavailable text => rate_limited", () => {
+    expect(classifyGrokCliError(503, "temporarily unavailable")).toBe("rate_limited");
+  });
+  test("priority processing text => rate_limited", () => {
+    expect(
+      classifyGrokCliError(429, "use a higher service tier for priority processing")
+    ).toBe("rate_limited");
+  });
+
+  // --- REGRESSION: 429 with quota body MUST stay exhausted (not rate_limited) ---
+  test("429 with quota tokens body => exhausted (REGRESSION)", () => {
+    expect(
+      classifyGrokCliError(
+        429,
+        "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
+      )
+    ).toBe("exhausted");
+  });
+  test("429 with free-usage body => exhausted (REGRESSION)", () => {
+    expect(classifyGrokCliError(429, "free-usage-exhausted")).toBe("exhausted");
+  });
+  test("429 with quota+exceed body => exhausted (REGRESSION)", () => {
+    expect(classifyGrokCliError(429, "quota has been exceeded")).toBe("exhausted");
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  test("numeric seconds value (5s -> 5000ms)", () => {
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "5" }))).toBe(5000);
+  });
+  test("numeric seconds value (0 -> clamped to 1000ms minimum)", () => {
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "0" }))).toBe(1000);
+  });
+  test("numeric seconds clamped to max 10000ms", () => {
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "120" }))).toBe(10000);
+  });
+  test("HTTP-date in the future returns a positive ms duration", () => {
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const result = parseRetryAfterMs(new Headers({ "retry-after": future }));
+    expect(typeof result).toBe("number");
+    expect(result!).toBeGreaterThan(0);
+    expect(result!).toBeLessThanOrEqual(10_000);
+  });
+  test("HTTP-date in the past returns 1000ms (minimum)", () => {
+    const past = new Date(Date.now() - 60_000).toUTCString();
+    expect(parseRetryAfterMs(new Headers({ "retry-after": past }))).toBe(1000);
+  });
+  test("missing header => undefined", () => {
+    expect(parseRetryAfterMs(new Headers({}))).toBeUndefined();
+  });
+  test("empty header => undefined", () => {
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "" }))).toBeUndefined();
+  });
+  test("garbage non-numeric, non-date => undefined", () => {
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "not-a-date-or-number" }))).toBeUndefined();
+  });
+  test("plain object headers supported", () => {
+    expect(parseRetryAfterMs({ "retry-after": "3" } as any)).toBe(3000);
+  });
+  test("capitalized header name supported (case-insensitive)", () => {
+    expect(parseRetryAfterMs({ "Retry-After": "3" } as any)).toBe(3000);
   });
 });
 

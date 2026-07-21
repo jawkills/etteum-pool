@@ -17,6 +17,7 @@ import {
 import { type GrokCliTokens, normalizeGrokCliCpa } from "./cpa";
 import {
   classifyGrokCliError,
+  parseRetryAfterMs,
   quotaFromGrokCliCenterSignals,
 } from "./errors";
 import {
@@ -93,20 +94,34 @@ export function prepareGrokCliChatRequest(
 
 export function failGrokCliChat(
   error: string,
-  opts?: { deadAccount?: boolean; quotaExhausted?: boolean; tokens?: unknown }
+  opts?: {
+    deadAccount?: boolean;
+    quotaExhausted?: boolean;
+    rateLimited?: boolean;
+    retryAfterMs?: number;
+    tokens?: unknown;
+  }
 ): ProviderResult {
   return {
     success: false,
     error,
     deadAccount: opts?.deadAccount,
     quotaExhausted: opts?.quotaExhausted,
+    rateLimited: opts?.rateLimited,
+    retryAfterMs: opts?.retryAfterMs,
     ...(opts?.tokens !== undefined ? { tokens: opts.tokens } : {}),
   };
 }
 
 export function failGrokCliImage(
   error: string,
-  opts?: { deadAccount?: boolean; quotaExhausted?: boolean; tokens?: unknown }
+  opts?: {
+    deadAccount?: boolean;
+    quotaExhausted?: boolean;
+    rateLimited?: boolean;
+    retryAfterMs?: number;
+    tokens?: unknown;
+  }
 ): GrokCliImageResult {
   return {
     success: false,
@@ -312,7 +327,9 @@ export async function grokCliRunImageOnce(
     return failGrokCliImage(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok image HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
+        : kind === "rate_limited"
+          ? `Grok capacity/rate-limit (image HTTP ${pipe.response.status})`
+          : `Grok image HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
@@ -418,10 +435,14 @@ export async function grokCliChatCompletion(
     return failGrokCliChat(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
+        : kind === "rate_limited"
+          ? `Grok capacity/rate-limit (HTTP ${pipe.response.status})`
+          : `Grok HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
+        rateLimited: kind === "rate_limited",
+        retryAfterMs: parseRetryAfterMs(pipe.response.headers),
         tokens: parsedTokens,
       }
     );
@@ -516,10 +537,14 @@ export async function grokCliChatCompletionStream(
     return failGrokCliChat(
       kind === "exhausted"
         ? GROK_CLI_CREDIT_SOFT_ERROR
-        : `Grok stream HTTP ${response.status}: ${text.slice(0, 300)}`,
+        : kind === "rate_limited"
+          ? `Grok capacity/rate-limit (stream HTTP ${response.status})`
+          : `Grok stream HTTP ${response.status}: ${text.slice(0, 300)}`,
       {
         quotaExhausted: kind === "exhausted",
         deadAccount: kind === "dead",
+        rateLimited: kind === "rate_limited",
+        retryAfterMs: parseRetryAfterMs(response.headers),
         tokens: parsedTokens,
       }
     );

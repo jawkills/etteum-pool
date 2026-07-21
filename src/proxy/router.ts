@@ -144,7 +144,24 @@ export async function routeRequest(
     providerName === "codebuddy" ||
     providerName === "codebuddy-china";
 
+  // Rate-limit / capacity backoff budget. When a provider returns a transient
+  // upstream overload signal (429/503/529 "at capacity"), we sleep between
+  // attempts so a global upstream slowdown does not burn through all accounts
+  // in milliseconds. Total wall-clock budget caps how long we keep the client
+  // waiting before giving up with a 503.
+  const RATE_LIMIT_BUDGET_MS = Number(process.env.POOLPROX_RATE_LIMIT_BUDGET_MS) || 10_000;
+  const routeStartMs = Date.now();
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Budget guard: stop if we have already exhausted the rate-limit wait
+    // window. This only short-circuits when at least one attempt has run, so
+    // the first attempt always fires even if the budget is tiny.
+    if (attempt > 0 && Date.now() - routeStartMs > RATE_LIMIT_BUDGET_MS) {
+      throw new Error(
+        `All accounts rate-limited for ${providerName}; please retry in a few minutes. Last error: ${lastError}`
+      );
+    }
+
     // BYOK uses prefix-based account lookup (not the generic pool),
     // so it can also find error-status accounts and retry them.
     const account = providerName === "byok"
@@ -261,6 +278,23 @@ export async function routeRequest(
             : disposition === "dead"
               ? "Account dead"
               : "Unknown error");
+
+      // --- Backoff on rate_limited / transient overload ---
+      // Respect an explicit upstream Retry-After hint when present; otherwise
+      // use exponential backoff (500ms -> 1s -> 2s -> 2s -> ...). The total
+      // wall-clock budget is bounded by RATE_LIMIT_BUDGET_MS so the client is
+      // never left waiting indefinitely.
+      if (disposition === "rate_limited" || result.retryAfterMs) {
+        const hint = result.retryAfterMs && result.retryAfterMs > 0
+          ? result.retryAfterMs
+          : Math.min(2000, 500 * Math.pow(2, attempt));
+        const elapsed = Date.now() - routeStartMs;
+        const remaining = Math.max(0, RATE_LIMIT_BUDGET_MS - elapsed);
+        const sleepMs = Math.min(hint, remaining);
+        if (sleepMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, sleepMs));
+        }
+      }
     } catch (error) {
       const errMsg =
         error instanceof Error ? error.message : String(error);

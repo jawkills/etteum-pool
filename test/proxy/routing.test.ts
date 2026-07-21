@@ -26,14 +26,17 @@ describe("getProviderForModel", () => {
     // kiro-pro
     ["kp-opus-4.8", "kiro-pro"],
     ["kp-sonnet-4.6-thinking", "kiro-pro"],
-    // codebuddy
-    ["cb-claude-opus-4.6", "codebuddy"],
-    ["gpt-5", "codebuddy"],
-    ["gpt-5.1", "codebuddy"],
-    ["gemini-2.5-pro", "codebuddy"],
-    ["deepseek-v3-2-volc", "codebuddy"],
-    ["enowx-default", "codebuddy"],
-    ["kimi-k2.5", "codebuddy"],
+    // codebuddy (cb- prefix only — unprefixed gpt/gemini route elsewhere or to kiro)
+    ["cb-opus-4.6", "codebuddy"],
+    ["cb-opus-4.7-1m", "codebuddy"],
+    ["cb-gpt-5.6-sol", "codebuddy"],
+    ["cb-gpt-5.5", "codebuddy"],
+    ["cb-gemini-2.5-pro", "codebuddy"],
+    ["cb-deepseek-v3", "codebuddy"],
+    ["cb-kimi-k2.6", "codebuddy"],
+    ["cb-glm-5.2", "codebuddy"],
+    ["cb-minimax-m3", "codebuddy"],
+    ["cb-o3", "codebuddy"],
     // kiro (standard)
     ["auto", "kiro"],
     ["claude-haiku-4.5", "kiro"],

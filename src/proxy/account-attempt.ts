@@ -13,6 +13,8 @@ export type AccountAttemptResult = {
   quotaExhausted?: boolean;
   deadAccount?: boolean;
   error?: string;
+  /** Suggested backoff (ms) for transient/rateLimited errors (Retry-After). */
+  retryAfterMs?: number;
 };
 
 export type AccountAttemptDisposition =

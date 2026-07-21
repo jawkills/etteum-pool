@@ -85,6 +85,22 @@ export function isTransientError(error?: string): boolean {
     normalized.includes("rate limit") ||
     normalized.includes("too many requests") ||
     normalized.includes("(429)") ||
+    // Grok-specific: capacity / overload signals from cli-chat-proxy upstream.
+    // The provider-level classifier sets rateLimited:true on these, but this
+    // fallback protects against any unflagged error string that still reaches
+    // the generic-failure branch.
+    normalized.includes("grok http 429") ||
+    normalized.includes("grok http 503") ||
+    normalized.includes("grok http 529") ||
+    normalized.includes("grok stream http 429") ||
+    normalized.includes("grok stream http 503") ||
+    normalized.includes("grok stream http 529") ||
+    normalized.includes("grok capacity/rate-limit") ||
+    normalized.includes("at capacity") ||
+    normalized.includes("high demand") ||
+    normalized.includes("overloaded") ||
+    normalized.includes("priority processing") ||
+    normalized.includes("(529)") ||
     // Bad request format (not account issue — request content caused it)
     normalized.includes("parse message failed") ||
     normalized.includes("invalid request") ||

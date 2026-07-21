@@ -131,6 +131,11 @@ export interface ProviderResult {
    */
   deadAccount?: boolean;
   tokens?: unknown; // New tokens after refresh (if refreshed during request)
+  /**
+   * Suggested backoff (ms) for transient/rateLimited errors, parsed from the
+   * upstream `Retry-After` header when present. Caller may respect or clamp.
+   */
+  retryAfterMs?: number;
 }
 
 export abstract class BaseProvider {

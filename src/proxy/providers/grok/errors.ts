@@ -7,12 +7,38 @@ import {
 } from "../../account-health";
 import { GROK_CLI_CREDIT_SOFT_ERROR, GROK_CLI_TOKEN_LIMIT } from "./constants";
 
-export type GrokCliErrorKind = "exhausted" | "dead" | "auth" | null;
+export type GrokCliErrorKind = "exhausted" | "dead" | "auth" | "rate_limited" | null;
+
+/**
+ * Body patterns that indicate transient upstream overload (not account/quota).
+ * Matches "at capacity", "high demand", "overloaded", "service tier",
+ * "priority processing", "temporarily unavailable".
+ */
+const CAPACITY_PATTERNS: readonly RegExp[] = [
+  /at capacity/i,
+  /high demand/i,
+  /overloaded/i,
+  /temporarily unavailable/i,
+  /service tier/i,
+  /priority processing/i,
+];
+
+function matchesCapacityBody(body: string): boolean {
+  return CAPACITY_PATTERNS.some((re) => re.test(body || ""));
+}
 
 /**
  * Classify center chat/image failures.
  * Live free/personal path returns HTTP 402 + code personal-team-blocked:spending-limit
  * (hyphenated, not "spending limit") and "run out of credits" — not only 403.
+ *
+ * Ordering matters:
+ *   1. dead (revocation) — checked first so invalid_grant always wins
+ *   2. exhausted (quota/credits) — checked BEFORE rate_limited so 429+quota body
+ *      stays "exhausted" and not "rate_limited"
+ *   3. rate_limited (capacity/429-no-quota/503/529) — transient upstream overload
+ *   4. auth (401 generic)
+ *   5. null (unknown — caller decides)
  */
 export function classifyGrokCliError(status: number, body: string): GrokCliErrorKind {
   const low = (body || "").toLowerCase();
@@ -20,6 +46,7 @@ export function classifyGrokCliError(status: number, body: string): GrokCliError
     if (status === 401 || status === 403) return "dead";
     if (status !== 402) return "dead";
   }
+  // --- exhausted: account-level quota/credit death (must run before rate_limited) ---
   if (
     status === 402 ||
     status === 403 ||
@@ -35,11 +62,66 @@ export function classifyGrokCliError(status: number, body: string): GrokCliError
   ) {
     return "exhausted";
   }
+  // --- rate_limited: transient upstream overload, NOT account-quota death ---
+  // Server-side capacity/overload signals first.
+  if (matchesCapacityBody(low)) {
+    return "rate_limited";
+  }
+  // Status-code-only signals: 529 (over capacity), 503 (service unavailable).
+  if (status === 529 || status === 503) {
+    return "rate_limited";
+  }
+  // 429 that didn't match the exhausted branch above is a plain rate-limit.
+  if (status === 429) {
+    return "rate_limited";
+  }
+  // "rate limit" / "too many requests" text at any status.
+  if (/rate limit|too many requests/i.test(low)) {
+    return "rate_limited";
+  }
   if (status === 401) {
     return "auth";
   }
   if (low.includes("invalid_grant") || low.includes("revoked")) return "dead";
   return null;
+}
+
+/**
+ * Parse the RFC 7231 `Retry-After` response header into a delay in milliseconds.
+ *
+ * Accepts either:
+ *   - delta-seconds (e.g. "5" -> 5000ms)
+ *   - HTTP-date (e.g. "Wed, 21 Oct 2026 07:28:00 GMT" -> ms until that time)
+ *
+ * Returns undefined when the header is missing or unparseable. Positive values
+ * are clamped to [1000, 10000] so a malicious/huge upstream hint cannot stall
+ * the proxy beyond its retry budget. Past dates clamp to the 1000ms minimum.
+ */
+export function parseRetryAfterMs(
+  headers: HeaderLike | null | undefined
+): number | undefined {
+  const raw = headerGet(headers, "retry-after");
+  if (raw == null || raw === "") return undefined;
+  const trimmed = raw.trim();
+
+  // delta-seconds form (most common)
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+    return clampRetryMs(seconds * 1000);
+  }
+
+  // HTTP-date form
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isFinite(dateMs)) return undefined;
+  const deltaMs = dateMs - Date.now();
+  // Past dates clamp to the minimum (treat as "retry immediately-ish").
+  return clampRetryMs(Math.max(0, deltaMs));
+}
+
+function clampRetryMs(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return 1000;
+  return Math.min(10_000, Math.max(1000, Math.round(ms)));
 }
 
 type HeaderLike =

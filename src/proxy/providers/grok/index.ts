@@ -58,6 +58,7 @@ export {
   classifyGrokAuthFailure,
   formatGrokAuthFailure,
   formatGrokCliDeadError,
+  parseRetryAfterMs,
 } from "./errors";
 export {
   grokCliContentBlocksToText,
