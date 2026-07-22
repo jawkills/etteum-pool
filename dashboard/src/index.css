@@ -1,118 +1,132 @@
 @import "tailwindcss";
 
 /*
- * ── PoolProxy theme tokens ──────────────────────────────────────────────
+ * ── Bitcoin DeFi theme tokens ───────────────────────────────────────────
  * Dark is the default (defined on :root). Light mode is applied by adding
  * the `.light` class to <html> (see the no-flash script in index.html and
  * the ThemeProvider). Every token has a value in BOTH schemes.
  *
- * Brand: neon green. Primary glows on dark, stays accessible on light.
+ * Brand: Bitcoin orange / gold. True void surfaces on dark.
  */
 
 :root {
-  /* Surfaces — neutral dark (no color tint) */
-  --background: #1e1e1e;
-  --foreground: #cccccc;
-  --card: #252526;
-  --card-foreground: #cccccc;
-  --popover: #252526;
-  --popover-foreground: #cccccc;
+  /* Surfaces — true void */
+  --background: #030304;
+  --foreground: #ffffff;
+  --card: #0f1115;
+  --card-foreground: #ffffff;
+  --popover: #0f1115;
+  --popover-foreground: #ffffff;
 
-  /* Brand / primary — electric neon green */
-  --primary: #00ff88;
-  --primary-foreground: #1e1e1e;
-  --accent: #00ff88;
-  --accent-foreground: #1e1e1e;
+  /* Brand — Bitcoin orange */
+  --primary: #f7931a;
+  --primary-foreground: #ffffff;
+  --primary-deep: #ea580c;
+  --gold: #ffd600;
+  --accent: #f7931a;
+  --accent-foreground: #ffffff;
 
   /* Neutrals */
-  --secondary: #2d2d2d;
-  --secondary-foreground: #9e9e9e;
-  --muted: #3c3c3c;
-  --muted-foreground: #858585;
+  --secondary: #151922;
+  --secondary-foreground: #cbd5e1;
+  --muted: #151922;
+  --muted-foreground: #94a3b8;
 
-  /* Semantic status */
-  --success: #00ff88;
-  --success-foreground: #1e1e1e;
-  --warning: #ffb224;
+  /* Semantic */
+  --success: #ffd600;
+  --success-foreground: #1a1400;
+  --warning: #fbbf24;
   --warning-foreground: #1a1200;
-  --error: #ff5c5c;
+  --error: #f87171;
   --error-foreground: #1a0606;
-  --info: #38bdf8;
-  --info-foreground: #04141d;
-  --destructive: #ff5c5c;
+  --info: #94a3b8;
+  --info-foreground: #030304;
+  --destructive: #ef4444;
   --destructive-foreground: #ffffff;
 
   /* Lines & focus */
-  --border: #3c3c3c;
-  --input: #3c3c3c;
-  --ring: #00ff88;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #f7931a;
 
-  /* Sidebar chrome */
-  --sidebar-bg: #181818;
-  --sidebar-border: #2d2d2d;
+  /* Sidebar */
+  --sidebar-bg: #030304;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
 
-  /* Chart palette (neon-leaning, well separated) */
-  --chart-1: #00ff88;
-  --chart-2: #38bdf8;
-  --chart-3: #a78bfa;
-  --chart-4: #fbbf24;
-  --chart-5: #fb7185;
-  --chart-6: #2dd4bf;
+  /* Charts — orange/gold first, restrained extras */
+  --chart-1: #f7931a;
+  --chart-2: #ffd600;
+  --chart-3: #ea580c;
+  --chart-4: #fb923c;
+  --chart-5: #fbbf24;
+  --chart-6: #94a3b8;
 
   /* Effects */
-  --glow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent),
-          0 0 24px -2px color-mix(in srgb, var(--primary) 60%, transparent);
-  --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.3), 0 4px 8px rgba(0, 0, 0, 0.2);
+  --glow: 0 0 20px -5px rgba(234, 88, 12, 0.5);
+  --glow-strong: 0 0 30px -5px rgba(247, 147, 26, 0.6);
+  --glow-gold: 0 0 16px rgba(255, 214, 0, 0.35);
+  --shadow-card: 0 0 40px -12px rgba(247, 147, 26, 0.12);
+  --gradient-primary: linear-gradient(90deg, #ea580c, #f7931a);
+  --gradient-gold-text: linear-gradient(90deg, #f7931a, #ffd600);
 
-  --radius: 0.625rem;
+  --radius: 0.75rem;
+
+  --font-heading: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .light {
-  --background: #f3f7f4;
-  --foreground: #0a1610;
+  --background: #f4f4f5;
+  --foreground: #09090b;
   --card: #ffffff;
-  --card-foreground: #0a1610;
+  --card-foreground: #09090b;
   --popover: #ffffff;
-  --popover-foreground: #0a1610;
+  --popover-foreground: #09090b;
 
-  --primary: #00a857;
+  --primary: #c2410c;
   --primary-foreground: #ffffff;
-  --accent: #00a857;
+  --primary-deep: #9a3412;
+  --gold: #ca8a04;
+  --accent: #c2410c;
   --accent-foreground: #ffffff;
 
-  --secondary: #e8efea;
-  --secondary-foreground: #41524a;
-  --muted: #eef3f0;
-  --muted-foreground: #5e6f66;
+  --secondary: #e4e4e7;
+  --secondary-foreground: #27272a;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
 
-  --success: #15a34a;
+  --success: #a16207;
   --success-foreground: #ffffff;
-  --warning: #c2710c;
+  --warning: #b45309;
   --warning-foreground: #ffffff;
   --error: #dc2626;
   --error-foreground: #ffffff;
-  --info: #0284c7;
+  --info: #475569;
   --info-foreground: #ffffff;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
-  --border: #dbe4df;
-  --input: #dbe4df;
-  --ring: #00a857;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #c2410c;
 
   --sidebar-bg: #ffffff;
-  --sidebar-border: #e4ebe7;
+  --sidebar-border: #e4e4e7;
 
-  --chart-1: #00a857;
-  --chart-2: #0284c7;
-  --chart-3: #7c3aed;
-  --chart-4: #d97706;
-  --chart-5: #e11d48;
-  --chart-6: #0d9488;
+  --chart-1: #c2410c;
+  --chart-2: #ca8a04;
+  --chart-3: #ea580c;
+  --chart-4: #f97316;
+  --chart-5: #d97706;
+  --chart-6: #64748b;
 
-  --glow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent),
-          0 0 14px -4px color-mix(in srgb, var(--primary) 35%, transparent);
-  --shadow-card: 0 1px 2px rgba(16, 24, 20, 0.06), 0 1px 3px rgba(16, 24, 20, 0.08);
+  --glow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --glow-strong: 0 4px 12px rgba(194, 65, 12, 0.2);
+  --glow-gold: 0 2px 8px rgba(202, 138, 4, 0.2);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --gradient-primary: linear-gradient(90deg, #9a3412, #c2410c);
+  --gradient-gold-text: linear-gradient(90deg, #c2410c, #ca8a04);
 }
 
 /*
@@ -183,8 +197,7 @@ html.light {
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-body);
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
@@ -198,9 +211,49 @@ body {
     fill 0.25s ease, stroke 0.25s ease;
 }
 
-/* Utility: neon glow ring for emphasis */
+/* Utility: glow ring for emphasis */
 .glow {
   box-shadow: var(--glow);
+}
+
+.glow-strong {
+  box-shadow: var(--glow-strong);
+}
+
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.text-gradient-gold {
+  background-image: var(--gradient-gold-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-gradient-primary {
+  background-image: var(--gradient-primary);
+}
+
+.bg-grid-pattern {
+  background-size: 48px 48px;
+  background-image:
+    linear-gradient(to right, rgba(30, 41, 59, 0.45) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 41, 59, 0.45) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at center, black 35%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-ping,
+  .theme-transition,
+  .theme-transition * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* Custom scrollbar */

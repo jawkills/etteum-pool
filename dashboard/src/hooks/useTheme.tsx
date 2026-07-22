@@ -37,7 +37,7 @@ function applyTheme(theme: Theme) {
   // Update theme-color meta for mobile browser chrome
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
-    meta.setAttribute("content", theme === "light" ? "#f3f7f4" : "#1e1e1e");
+    meta.setAttribute("content", theme === "light" ? "#f4f4f5" : "#030304");
   }
 }
 
