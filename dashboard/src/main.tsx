@@ -3,6 +3,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ThemeProvider } from "./hooks/useTheme";
 import { WebSocketProvider } from "./hooks/useWebSocket";
+import { Toaster } from "./components/ui/toast";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -11,6 +12,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <BrowserRouter>
         <App />
       </BrowserRouter>
+      <Toaster />
     </WebSocketProvider>
   </ThemeProvider>
 );
