@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   Dialog,
   DialogContent,
@@ -1237,21 +1238,21 @@ export default function Accounts() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Accounts</h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">Manage provider accounts</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleLoginAll}>
-            <Play className="w-4 h-4 mr-2" /> Login Pending
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Accounts"
+        title="Provider pool"
+        description="Manage provider accounts and BYOK keys"
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className="w-4 h-4 mr-2" /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLoginAll}>
+              <Play className="w-4 h-4 mr-2" /> Login Pending
+            </Button>
+          </>
+        }
+      />
 
       {/* Messages */}
       {(message || error) && (
@@ -1340,20 +1341,20 @@ export default function Accounts() {
               {/* Status grid */}
               <div className="grid grid-cols-4 gap-2 text-center">
                 <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--success)]">{stat.active}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Active</p>
+                  <p className="font-mono text-lg font-bold text-[var(--success)]">{stat.active}</p>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Active</p>
                 </div>
                 <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--warning)]">{stat.exhausted}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Exhausted</p>
+                  <p className="font-mono text-lg font-bold text-[var(--warning)]">{stat.exhausted}</p>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Exhausted</p>
                 </div>
                 <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--warning)]">{stat.pending}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Pending</p>
+                  <p className="font-mono text-lg font-bold text-[var(--warning)]">{stat.pending}</p>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Pending</p>
                 </div>
                 <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--error)]">{stat.error}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Error</p>
+                  <p className="font-mono text-lg font-bold text-[var(--error)]">{stat.error}</p>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Error</p>
                 </div>
               </div>
 

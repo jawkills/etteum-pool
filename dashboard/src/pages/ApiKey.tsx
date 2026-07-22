@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Copy, Eye, EyeOff, RefreshCw, Check, Save, ShieldCheck } from "lucide-react";
 import { fetchApiKey, regenerateApiKey, setApiKey, testApiKey } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
+import { toast } from "@/hooks/useToast";
 
 export default function ApiKey() {
   const [apiKey, setApiKeyState] = useState(localStorage.getItem("api_key") || "pool-proxy-secret-key");
@@ -49,6 +52,7 @@ export default function ApiKey() {
   const handleCopy = () => {
     navigator.clipboard.writeText(apiKey);
     setCopiedTimed(true);
+    toast({ title: "API key copied", tone: "success" });
   };
 
   async function handleSave() {
@@ -58,6 +62,7 @@ export default function ApiKey() {
       setSource(res.source);
       setValid(true);
       notify("API key saved to backend and browser. It can now be used for proxy requests.");
+      toast({ title: "API key activated", tone: "success" });
     } catch (err) {
       fail(err);
     }
@@ -71,6 +76,7 @@ export default function ApiKey() {
       setSource(res.source);
       setValid(true);
       notify("New API key generated, saved, and activated.");
+      toast({ title: "API key regenerated", tone: "success" });
     } catch (err) {
       fail(err);
     }
@@ -81,6 +87,10 @@ export default function ApiKey() {
       const res = await testApiKey(apiKey) as { valid: boolean };
       setValid(res.valid);
       notify(res.valid ? "API key is valid." : "API key is invalid.");
+      toast({
+        title: res.valid ? "API key is valid" : "API key is invalid",
+        tone: res.valid ? "success" : "error",
+      });
     } catch (err) {
       fail(err);
     }
@@ -88,12 +98,11 @@ export default function ApiKey() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">API Key</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Generate and activate proxy API keys
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Proxy"
+        title="API Key"
+        description="Generate and activate proxy API keys"
+      />
 
       {(message || error) && (
         <div className={`rounded-md p-3 text-sm ${message ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
@@ -135,10 +144,11 @@ export default function ApiKey() {
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm">
-              Status: {valid === true && <span className="text-[var(--success)]">valid</span>}
-              {valid === false && <span className="text-[var(--error)]">invalid</span>}
-              {valid === null && <span className="text-[var(--muted-foreground)]">not tested</span>}
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-[var(--muted-foreground)]">Status</span>
+              {valid === true && <StatusBadge status="success">valid</StatusBadge>}
+              {valid === false && <StatusBadge status="error">invalid</StatusBadge>}
+              {valid === null && <StatusBadge status="idle">not tested</StatusBadge>}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={loadKey}>Load Active</Button>
@@ -154,7 +164,7 @@ export default function ApiKey() {
 
           <div className="rounded-lg bg-[var(--secondary)] p-4 mt-4">
             <h4 className="text-sm font-medium text-[var(--foreground)] mb-2">Usage Example</h4>
-            <pre className="text-xs text-[var(--muted-foreground)] overflow-x-auto">
+            <pre className="font-mono text-xs text-[var(--muted-foreground)] overflow-x-auto">
 {`curl http://localhost:1930/v1/chat/completions \\
   -H "Authorization: Bearer ${showKey ? apiKey : "sk-pool-***"}" \\
   -H "Content-Type: application/json" \\

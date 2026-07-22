@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { ArrowLeft, Eye, EyeOff, FlaskConical, Key, Plus, RefreshCw, Save, Trash2, Zap } from "lucide-react";
 import {
   deleteAccount,
@@ -253,29 +254,29 @@ export default function ByokAccountList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-[var(--foreground)]">BYOK · {prefix}</h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">
-              {form.keys.length} keys · {activeKeyCount} enabled · {models.length} models · {lbLabel(form.load_balancing_method)}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={testAll} disabled={testingKey !== null || form.keys.every((k) => !k.id)}>
-            <FlaskConical className="w-4 h-4 mr-2" /> Test All
-          </Button>
-          <Button size="sm" onClick={saveSettings} disabled={saving}>
-            <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save Settings"}
-          </Button>
-        </div>
+      <div className="flex items-start gap-2">
+        <Button variant="ghost" size="icon" className="mt-1 shrink-0" onClick={() => navigate("/accounts")}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <PageHeader
+          className="flex-1"
+          eyebrow="Accounts"
+          title={<>BYOK · <span className="font-mono">{prefix}</span></>}
+          description={`${form.keys.length} keys · ${activeKeyCount} enabled · ${models.length} models · ${lbLabel(form.load_balancing_method)}`}
+          actions={
+            <>
+              <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+                <RefreshCw className="w-4 h-4 mr-2" /> Refresh
+              </Button>
+              <Button variant="outline" size="sm" onClick={testAll} disabled={testingKey !== null || form.keys.every((k) => !k.id)}>
+                <FlaskConical className="w-4 h-4 mr-2" /> Test All
+              </Button>
+              <Button size="sm" onClick={saveSettings} disabled={saving}>
+                <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save Settings"}
+              </Button>
+            </>
+          }
+        />
       </div>
 
       {(message || error) && (
@@ -337,12 +338,12 @@ export default function ByokAccountList() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--border)]">
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Key Label</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Secret</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Status</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Enabled</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Last Used</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Actions</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Key Label</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Secret</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Status</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Enabled</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Last Used</th>
+                  <th className="p-4 text-left font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

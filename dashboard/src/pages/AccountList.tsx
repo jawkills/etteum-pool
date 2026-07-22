@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { ArrowLeft, Search, Trash2, RefreshCw, RotateCcw, ExternalLink, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle2, XCircle } from "lucide-react";
 import { formatDateTimeID } from "@/lib/utils";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
@@ -494,37 +495,38 @@ export default function AccountList() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-[var(--foreground)]">{labelProvider(provider || "")}</h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">{accounts.length} accounts</p>
-          </div>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleWarmupAll}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Warmup All
-          </Button>
-          {/* grok has no browser login queue — use Accounts Refresh tok / Reauth instead */}
-          {provider !== "grok" && (
-            <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
-              <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
-            <CheckCircle2 className="w-4 h-4 mr-2 text-[var(--success)]" /> Enable All ({disabledCount})
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => handleToggleAll(false)} disabled={enabledCount === 0}>
-            <XCircle className="w-4 h-4 mr-2 text-[var(--error)]" /> Disable All ({enabledCount})
-          </Button>
-        </div>
+      <div className="flex items-start gap-2">
+        <Button variant="ghost" size="icon" className="mt-1 shrink-0" onClick={() => navigate("/accounts")}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <PageHeader
+          className="flex-1"
+          eyebrow="Accounts"
+          title={labelProvider(provider || "")}
+          description={`${accounts.length} accounts`}
+          actions={
+            <>
+              <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+                <RefreshCw className="w-4 h-4 mr-2" /> Refresh
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleWarmupAll}>
+                <RefreshCw className="w-4 h-4 mr-2" /> Warmup All
+              </Button>
+              {/* grok has no browser login queue — use Accounts Refresh tok / Reauth instead */}
+              {provider !== "grok" && (
+                <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
+                  <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
+                <CheckCircle2 className="w-4 h-4 mr-2 text-[var(--success)]" /> Enable All ({disabledCount})
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleToggleAll(false)} disabled={enabledCount === 0}>
+                <XCircle className="w-4 h-4 mr-2 text-[var(--error)]" /> Disable All ({enabledCount})
+              </Button>
+            </>
+          }
+        />
       </div>
 
       {/* Messages */}
@@ -597,22 +599,22 @@ export default function AccountList() {
                       onChange={toggleSelectAllVisible}
                     />
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("email")}>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("email")}>
                     <span className="inline-flex items-center">Email<SortIcon column="email" /></span>
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("status")}>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("status")}>
                     <span className="inline-flex items-center">Status<SortIcon column="status" /></span>
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("enabled")}>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("enabled")}>
                     <span className="inline-flex items-center">Enabled<SortIcon column="enabled" /></span>
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden sm:table-cell" onClick={() => handleSort("credit")}>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden sm:table-cell" onClick={() => handleSort("credit")}>
                     <span className="inline-flex items-center">Credit<SortIcon column="credit" /></span>
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden md:table-cell" onClick={() => handleSort("lastLogin")}>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden md:table-cell" onClick={() => handleSort("lastLogin")}>
                     <span className="inline-flex items-center">Last Login<SortIcon column="lastLogin" /></span>
                   </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4">Actions</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -630,7 +632,7 @@ export default function AccountList() {
                       />
                     </td>
                     <td className="p-4 text-sm text-[var(--foreground)]">
-                      <div>{account.email}</div>
+                      <div className="font-mono text-xs">{account.email}</div>
                       {account.errorMessage && <div className="text-xs text-[var(--error)] mt-1 line-clamp-1" title={account.errorMessage}>{account.errorMessage}</div>}
                     </td>
                     <td className="p-4"><Badge variant={statusVariants[account.status]}>{account.status}</Badge></td>

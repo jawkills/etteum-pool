@@ -1,9 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { Cpu, Copy, Check, Search, Zap, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { fetchModels, testModelConnection } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
+import { toast } from "@/hooks/useToast";
 
 interface ModelData {
   id: string;
@@ -69,6 +71,7 @@ export default function Models() {
   async function copyModelId(modelId: string) {
     await navigator.clipboard.writeText(modelId);
     setCopiedModel(modelId);
+    toast({ title: "Model ID copied", tone: "success" });
   }
 
   async function handleTestModel(modelId: string) {
@@ -78,12 +81,18 @@ export default function Models() {
       if (res.success) {
         const latency = res.latency_ms != null ? ` · ${res.latency_ms}ms` : "";
         const provider = res.provider ? ` · ${res.provider}` : "";
-        setTestBanner({ kind: "ok", text: `✓ ${modelId} OK${provider}${latency}` });
+        const text = `✓ ${modelId} OK${provider}${latency}`;
+        setTestBanner({ kind: "ok", text });
+        toast({ title: "Connection OK", description: `${modelId}${provider}${latency}`, tone: "success" });
       } else {
-        setTestBanner({ kind: "err", text: res.error || `Connection test failed for ${modelId}` });
+        const text = res.error || `Connection test failed for ${modelId}`;
+        setTestBanner({ kind: "err", text });
+        toast({ title: "Connection failed", description: text, tone: "error" });
       }
     } catch (err) {
-      setTestBanner({ kind: "err", text: err instanceof Error ? err.message : String(err) });
+      const text = err instanceof Error ? err.message : String(err);
+      setTestBanner({ kind: "err", text });
+      toast({ title: "Connection failed", description: text, tone: "error" });
     } finally {
       setTestingModel(null);
     }
@@ -91,21 +100,19 @@ export default function Models() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
+      <div className="flex h-64 items-center justify-center font-mono text-xs uppercase tracking-wider text-[var(--muted-foreground)]">
+        Loading…
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">Models</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          {models.length} models available across {new Set(models.map((m) => m.owned_by)).size} providers
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Catalog"
+        title="Models"
+        description={`${models.length} models available across ${new Set(models.map((m) => m.owned_by)).size} providers`}
+      />
 
       {testBanner && (
         <div className={`rounded-md p-3 text-sm ${testBanner.kind === "ok" ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
@@ -153,19 +160,19 @@ export default function Models() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-[var(--secondary)]/50">
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                  <th className="text-left py-3 px-4 font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Model
                   </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                  <th className="text-left py-3 px-4 font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Owner
                   </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                  <th className="text-left py-3 px-4 font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Context
                   </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                  <th className="text-left py-3 px-4 font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Output
                   </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                  <th className="text-left py-3 px-4 font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Features
                   </th>
                   <th className="w-20"></th>
@@ -180,7 +187,7 @@ export default function Models() {
                     {/* Model ID */}
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-[var(--foreground)]">
+                        <span className="font-mono text-sm font-medium text-[var(--foreground)]">
                           {model.id}
                         </span>
                       </div>
@@ -194,12 +201,12 @@ export default function Models() {
                     </td>
 
                     {/* Context */}
-                    <td className="py-3 px-4 text-sm text-[var(--foreground)]">
+                    <td className="py-3 px-4 font-mono text-sm text-[var(--foreground)]">
                       {formatNumber(model.context_window)}
                     </td>
 
                     {/* Output */}
-                    <td className="py-3 px-4 text-sm text-[var(--foreground)]">
+                    <td className="py-3 px-4 font-mono text-sm text-[var(--foreground)]">
                       {formatNumber(model.max_output)}
                     </td>
 
