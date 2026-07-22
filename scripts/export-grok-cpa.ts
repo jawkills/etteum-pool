@@ -91,9 +91,7 @@ async function main() {
     lines.push(JSON.stringify(rec));
   }
 
-  writeFileSync(outPath, lines.join("
-") + (lines.length ? "
-" : ""), "utf8");
+  writeFileSync(outPath, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
   console.log(`[export-grok-cpa] wrote ${lines.length} accounts → ${outPath}`);
   console.log(
     `[export-grok-cpa] verify: DB count ${rows.length} == file lines ${lines.length}`
