@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Filter, Plus, Trash2, Power, PowerOff, Pencil, X } from "lucide-react";
 import { fetchApi } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
@@ -119,23 +121,22 @@ export default function FilterRules() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Filter Rules</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Pre-request sanitizer rules to strip patterns that trigger upstream content moderation
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {data.activeCount}/{data.count} active
-          </span>
-          <Button size="sm" onClick={() => setForm({ ...emptyForm })}>
-            <Plus className="w-3 h-3 mr-1" />
-            Add Rule
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Safety"
+        title="Filter Rules"
+        description="Pre-request sanitizer rules to strip patterns that trigger upstream content moderation"
+        actions={
+          <>
+            <StatusBadge status={data.activeCount > 0 ? "active" : "idle"}>
+              {data.activeCount}/{data.count} active
+            </StatusBadge>
+            <Button size="sm" onClick={() => setForm({ ...emptyForm })}>
+              <Plus className="w-3 h-3 mr-1" />
+              Add Rule
+            </Button>
+          </>
+        }
+      />
 
       {message && (
         <div className="px-4 py-2 rounded-md bg-[var(--secondary)] text-sm text-[var(--foreground)]">
@@ -225,20 +226,12 @@ export default function FilterRules() {
                     <span className="font-mono text-xs text-[var(--muted-foreground)] shrink-0 w-32 truncate">
                       {rule.ruleId}
                     </span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded shrink-0 ${
-                        rule.isRegex ? "bg-[var(--info)]/10 text-[var(--info)]" : "bg-[var(--primary)]/10 text-[var(--primary)]"
-                      }`}
-                    >
+                    <StatusBadge status={rule.isRegex ? "live" : "idle"} className="shrink-0">
                       {rule.isRegex ? "regex" : "string"}
-                    </span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded shrink-0 ${
-                        rule.isActive ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--muted)]/10 text-[var(--muted-foreground)]"
-                      }`}
-                    >
+                    </StatusBadge>
+                    <StatusBadge status={rule.isActive ? "active" : "idle"} className="shrink-0">
                       {rule.isActive ? "active" : "off"}
-                    </span>
+                    </StatusBadge>
                     <span className="font-mono text-sm truncate text-[var(--foreground)]" title={rule.pattern}>
                       {truncate(rule.pattern)}
                     </span>

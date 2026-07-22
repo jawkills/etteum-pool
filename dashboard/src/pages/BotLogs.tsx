@@ -2,6 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { clearAuthLogs, fetchAuthLogs, fetchAuthQueue, fetchWarmupQueue, loginAccount, loginAccounts, stopAllAccounts } from "@/lib/api";
 import { useWsEvent, useWsStatus } from "@/hooks/useWebSocket";
 import { AlertTriangle, CheckCircle, ChevronDown, RefreshCw, RotateCcw, Trash2, Radio, StopCircle } from "lucide-react";
@@ -340,26 +342,27 @@ export default function BotLogs() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Login Logs</h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Live progress for auto-login bot and Grok farm, including failed accounts.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={connected ? "success" : "secondary"}>{connected ? "Live" : "Disconnected"}</Badge>
-          <Button variant="outline" size="sm" onClick={load}><RefreshCw className="w-4 h-4 mr-2" />Refresh</Button>
-          <Button variant="destructive" size="sm" onClick={handleStopAll}><StopCircle className="w-4 h-4 mr-2" />Stop All</Button>
-          <Button variant="outline" size="sm" onClick={handleClear}><Trash2 className="w-4 h-4 mr-2" />Clear</Button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Logs"
+        title="Login Logs"
+        description="Live progress for auto-login bot and Grok farm, including failed accounts."
+        actions={
+          <>
+            <StatusBadge status={connected ? "live" : "offline"} pulse={connected}>
+              {connected ? "Live" : "Disconnected"}
+            </StatusBadge>
+            <Button variant="outline" size="sm" onClick={load}><RefreshCw className="w-4 h-4 mr-2" />Refresh</Button>
+            <Button variant="destructive" size="sm" onClick={handleStopAll}><StopCircle className="w-4 h-4 mr-2" />Stop All</Button>
+            <Button variant="outline" size="sm" onClick={handleClear}><Trash2 className="w-4 h-4 mr-2" />Clear</Button>
+          </>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="text-xs text-[var(--muted-foreground)]">Queue</p><p className="text-2xl font-bold">{totalQueued}</p></CardContent></Card>
-        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="text-xs text-[var(--muted-foreground)]">Progress</p><p className="text-2xl font-bold text-[var(--warning)]">{totalProgress}</p></CardContent></Card>
-        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="text-xs text-[var(--muted-foreground)]">Success</p><p className="text-2xl font-bold text-[var(--success)]">{totalSuccess}</p></CardContent></Card>
-        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="text-xs text-[var(--muted-foreground)]">Failed</p><p className="text-2xl font-bold text-[var(--error)]">{totalFailed}</p></CardContent></Card>
+        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Queue</p><p className="font-mono text-2xl font-bold">{totalQueued}</p></CardContent></Card>
+        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Progress</p><p className="font-mono text-2xl font-bold text-[var(--warning)]">{totalProgress}</p></CardContent></Card>
+        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Success</p><p className="font-mono text-2xl font-bold text-[var(--success)]">{totalSuccess}</p></CardContent></Card>
+        <Card className="border-[var(--border)]"><CardContent className="p-4"><p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Failed</p><p className="font-mono text-2xl font-bold text-[var(--error)]">{totalFailed}</p></CardContent></Card>
       </div>
 
       {(totalProgress > 0 || totalQueued > 0) && (
@@ -417,12 +420,12 @@ export default function BotLogs() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--border)]">
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4">Time</th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4">Status</th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 hidden md:table-cell">Account</th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 hidden md:table-cell">Provider</th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 hidden lg:table-cell">Step</th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4">Message</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4">Time</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4">Status</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 hidden md:table-cell">Account</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 hidden md:table-cell">Provider</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4 hidden lg:table-cell">Step</th>
+                  <th className="text-left font-mono text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider p-4">Message</th>
                 </tr>
               </thead>
               <tbody>

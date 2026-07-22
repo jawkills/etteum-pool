@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Globe, Plus, Trash2, Upload, RefreshCw, Power, PowerOff, Download } from "lucide-react";
 import { fetchApi, fetchProxyCountries, scrapeProxies, type ProxyCountry } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
@@ -186,16 +188,12 @@ export default function ProxyPool() {
   };
 
   const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      active: "bg-[var(--success)]/10 text-[var(--success)]",
-      disabled: "bg-[var(--warning)]/10 text-[var(--warning)]",
-      error: "bg-[var(--error)]/10 text-[var(--error)]",
+    const map: Record<string, "active" | "warning" | "error" | "idle"> = {
+      active: "active",
+      disabled: "warning",
+      error: "error",
     };
-    return (
-      <span className={`text-xs px-2 py-0.5 rounded ${colors[status] || "bg-[var(--muted)]/10 text-[var(--muted-foreground)]"}`}>
-        {status}
-      </span>
-    );
+    return <StatusBadge status={map[status] || "idle"}>{status}</StatusBadge>;
   };
 
   const latencyBadge = (ms: number | null) => {
@@ -223,29 +221,28 @@ export default function ProxyPool() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Proxy Pool</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Manage HTTP/SOCKS5 proxies for upstream requests and auth
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {pool.activeCount}/{pool.count} active
-          </span>
-          <Button variant="outline" size="sm" onClick={handleCheckAll} disabled={checking}>
-            <RefreshCw className={`w-3 h-3 mr-1 ${checking ? "animate-spin" : ""}`} />
-            Check All
-          </Button>
-          {pool.count > 0 && (
-            <Button variant="outline" size="sm" onClick={handleClearAll}>
-              <Trash2 className="w-3 h-3 mr-1" />
-              Clear All
+      <PageHeader
+        eyebrow="Network"
+        title="Proxy Pool"
+        description="Manage HTTP/SOCKS5 proxies for upstream requests and auth"
+        actions={
+          <>
+            <StatusBadge status={pool.activeCount > 0 ? "active" : "idle"}>
+              {pool.activeCount}/{pool.count} active
+            </StatusBadge>
+            <Button variant="outline" size="sm" onClick={handleCheckAll} disabled={checking}>
+              <RefreshCw className={`w-3 h-3 mr-1 ${checking ? "animate-spin" : ""}`} />
+              Check All
             </Button>
-          )}
-        </div>
-      </div>
+            {pool.count > 0 && (
+              <Button variant="outline" size="sm" onClick={handleClearAll}>
+                <Trash2 className="w-3 h-3 mr-1" />
+                Clear All
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {message && (
         <div className="px-4 py-2 rounded-md bg-[var(--secondary)] text-sm text-[var(--foreground)]">

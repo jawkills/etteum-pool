@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Save, RefreshCw, Zap, Flame, Globe, Wand2 } from "lucide-react";
 import {
   fetchSettings,
@@ -12,6 +14,7 @@ import {
 } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
+import { toast } from "@/hooks/useToast";
 
 const PROVIDER_LABELS: Record<string, string> = {
   kiro: "Kiro",
@@ -118,6 +121,7 @@ export default function Settings() {
       setSavedAt(new Date());
       setDirty(false);
       setMessage("Settings saved.");
+      toast({ title: "Settings saved", tone: "success" });
     } finally {
       setSaving(false);
     }
@@ -127,27 +131,22 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Proxy Settings</h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Configure load balancing and auto warmup
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {dirty && (
-            <span className="text-xs text-[var(--warning)] px-2 py-1 rounded bg-[var(--warning)]/10">
-              Unsaved
-            </span>
-          )}
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Reload
-          </Button>
-          <Button size="sm" onClick={save} disabled={saving || !dirty}>
-            <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Config"
+        title="Proxy Settings"
+        description="Configure load balancing and auto warmup"
+        actions={
+          <>
+            {dirty && <StatusBadge status="warning">Unsaved</StatusBadge>}
+            <Button variant="outline" size="sm" onClick={load}>
+              <RefreshCw className="w-4 h-4 mr-2" /> Reload
+            </Button>
+            <Button size="sm" onClick={save} disabled={saving || !dirty}>
+              <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save"}
+            </Button>
+          </>
+        }
+      />
 
       {message && (
         <div className="rounded-md bg-[var(--success)]/10 p-3 text-sm text-[var(--success)]">
