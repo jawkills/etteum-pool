@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   CreditCard,
   Trash2,
@@ -242,18 +243,16 @@ export default function VccPool() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">VCC Pool</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Generate and manage virtual credit cards with real-time BIN lookup
-          </p>
-        </div>
-        <Badge variant="secondary" className="text-base px-4 py-2">
-          {pool.count} active card{pool.count !== 1 ? "s" : ""}
-        </Badge>
-      </div>
+      <PageHeader
+        eyebrow="Tools"
+        title="VCC Pool"
+        description="Generate and manage virtual credit cards with real-time BIN lookup"
+        actions={
+          <Badge variant="secondary" className="font-mono text-sm px-4 py-2">
+            {pool.count} active card{pool.count !== 1 ? "s" : ""}
+          </Badge>
+        }
+      />
 
       {/* Stats */}
       {pool.count > 0 && (
@@ -262,39 +261,39 @@ export default function VccPool() {
             <CardContent className="pt-6 pb-4">
               <div className="flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-[var(--primary)]" />
-                <div className="text-2xl font-bold">{stats.total}</div>
+                <div className="font-mono text-2xl font-bold">{stats.total}</div>
               </div>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">Total</p>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mt-1">Total</p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-6 pb-4">
-              <div className="text-2xl font-bold text-blue-500">{stats.visa}</div>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              <div className="font-mono text-2xl font-bold text-[var(--info)]">{stats.visa}</div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mt-1">
                 Visa
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-6 pb-4">
-              <div className="text-2xl font-bold text-orange-500">
+              <div className="font-mono text-2xl font-bold text-[var(--warning)]">
                 {stats.mastercard}
               </div>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mt-1">
                 Mastercard
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-6 pb-4">
-              <div className="text-2xl font-bold text-cyan-500">{stats.amex}</div>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">Amex</p>
+              <div className="font-mono text-2xl font-bold text-[var(--chart-3)]">{stats.amex}</div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mt-1">Amex</p>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-6 pb-4">
-              <div className="text-2xl font-bold">{stats.other}</div>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">Other</p>
+              <div className="font-mono text-2xl font-bold">{stats.other}</div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mt-1">Other</p>
             </CardContent>
           </Card>
         </div>

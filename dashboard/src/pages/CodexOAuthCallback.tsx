@@ -54,10 +54,15 @@ export default function CodexOAuthCallback() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--background)] p-6 text-center">
-      <div className="max-w-md space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-6">
-        <h1 className="text-lg font-semibold text-[var(--foreground)]">Codex Login</h1>
+      <div className="max-w-md space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-[0_0_40px_rgba(247,147,26,0.08)]">
+        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--primary)]">OAuth</div>
+        <h1 className="font-heading text-xl font-bold tracking-tight text-[var(--foreground)]">Codex Login</h1>
         <p className="text-sm text-[var(--muted-foreground)]">{message}</p>
-        {done && <p className="text-xs text-[var(--muted-foreground)]">You can close this window.</p>}
+        {done && (
+          <p className="font-mono text-xs uppercase tracking-wider text-[var(--muted-foreground)]">
+            You can close this window.
+          </p>
+        )}
       </div>
     </div>
   );

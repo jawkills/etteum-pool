@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   Plug,
   ArrowRight,
@@ -296,17 +297,15 @@ export default function Integration() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)] flex items-center gap-2">
-            <Plug className="w-6 h-6" /> Integration
-          </h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Connect AI coding tools to your proxy pool
-          </p>
-        </div>
-        <div className="flex items-center gap-2" />
-      </div>
+      <PageHeader
+        eyebrow="Tools"
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Plug className="w-6 h-6 text-[var(--primary)]" /> Integration
+          </span>
+        }
+        description="Connect AI coding tools to your proxy pool"
+      />
 
       {message && (
         <div className="px-4 py-2 rounded-md bg-[var(--secondary)] text-sm text-[var(--foreground)]">

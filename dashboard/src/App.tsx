@@ -22,7 +22,11 @@ const Integration = lazy(() => import("./pages/Integration"));
 const CodexOAuthCallback = lazy(() => import("./pages/CodexOAuthCallback"));
 
 function RouteFallback() {
-  return <div className="flex h-64 items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>;
+  return (
+    <div className="flex h-64 items-center justify-center font-mono text-xs uppercase tracking-wider text-[var(--muted-foreground)]">
+      Loading…
+    </div>
+  );
 }
 
 export default function App() {
@@ -56,7 +60,11 @@ export default function App() {
   }
 
   if (authed === null) {
-    return <div className="flex h-screen items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>;
+    return (
+      <div className="flex h-screen items-center justify-center font-mono text-xs uppercase tracking-wider text-[var(--muted-foreground)]">
+        Loading…
+      </div>
+    );
   }
 
   if (!authed) {

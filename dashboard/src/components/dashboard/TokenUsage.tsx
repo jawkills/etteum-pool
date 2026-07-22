@@ -318,16 +318,16 @@ export default function TokenUsage({
         {/* Summary cards */}
         <div className="grid grid-cols-3 gap-4">
           <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Total</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.total)}</p>
+            <p className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">Total</p>
+            <p className="font-mono text-xl font-bold mt-1">{formatNumber(stats.total)}</p>
           </div>
           <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Prompt</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.prompt)}</p>
+            <p className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">Prompt</p>
+            <p className="font-mono text-xl font-bold mt-1">{formatNumber(stats.prompt)}</p>
           </div>
           <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Completion</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.completion)}</p>
+            <p className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">Completion</p>
+            <p className="font-mono text-xl font-bold mt-1">{formatNumber(stats.completion)}</p>
           </div>
         </div>
 
@@ -345,8 +345,8 @@ export default function TokenUsage({
               <div key={`${model.provider || "unknown"}/${model.model}`} className="space-y-1">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
-                    <span className="text-[var(--foreground)]">{model.provider ? `${model.provider}/` : ""}{model.model}</span>
-                    <span className="ml-2 text-[10px] uppercase text-[var(--muted-foreground)]">{model.creditSource || "estimated"}</span>
+                    <span className="font-mono text-[var(--foreground)]">{model.provider ? `${model.provider}/` : ""}{model.model}</span>
+                    <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{model.creditSource || "estimated"}</span>
                   </div>
                   <span className="shrink-0 text-[var(--muted-foreground)]">
                     {formatNumber(model.tokens)} tokens · {model.requests || 0} req

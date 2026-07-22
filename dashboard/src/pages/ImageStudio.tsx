@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   Sparkles,
   Send,
@@ -412,38 +413,29 @@ export default function ImageStudio() {
 
   return (
     <div className="flex h-[calc(100vh-6rem)] md:h-[calc(100vh-3rem)] flex-col gap-4">
-      {/* Page Header */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-[var(--foreground)]">
-              Image Studio
-            </h1>
-            <p className="text-xs text-[var(--muted-foreground)]">
-              Prompt assist + generate via Canva atau Grok (free image)
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {results.length > 0 && (
+      <PageHeader
+        eyebrow="Tools"
+        title="Image Studio"
+        description="Prompt assist + generate via Canva atau Grok (free image)"
+        actions={
+          results.length > 0 ? (
             <>
-              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-xs">
                 <ImageIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
                 <span className="text-[var(--muted-foreground)]">
-                  <span className="font-medium text-[var(--foreground)]">{totalImages}</span> hasil
+                  <span className="font-mono font-medium text-[var(--foreground)]">{totalImages}</span> hasil
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
+              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-xs">
                 <Sparkles className="h-3.5 w-3.5 text-[var(--warning)]" />
                 <span className="text-[var(--muted-foreground)]">
-                  <span className="font-medium text-[var(--foreground)]">{totalCredits}</span> credits
+                  <span className="font-mono font-medium text-[var(--foreground)]">{totalCredits}</span> credits
                 </span>
               </div>
             </>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* Main 2-column area: Chat | Preview */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -456,7 +448,7 @@ export default function ImageStudio() {
               <select
                 value={assistModel}
                 onChange={(e) => setAssistModel(e.target.value)}
-                className="h-7 max-w-[140px] appearance-none truncate rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-6 text-[11px] text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
+                className="h-9 max-w-[160px] appearance-none truncate rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-6 font-mono text-xs text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
                 title="AI Assist Model"
               >
                 {groupedModels.map(([provider, list]) => (
@@ -478,7 +470,7 @@ export default function ImageStudio() {
               <button
                 type="button"
                 onClick={() => setImageEngine("canva")}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-9 items-center gap-1 rounded px-2.5 text-xs transition-colors ${
                   imageEngine === "canva"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -493,7 +485,7 @@ export default function ImageStudio() {
                   setImageEngine("grok");
                   setGenType("image");
                 }}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-9 items-center gap-1 rounded px-2.5 text-xs transition-colors ${
                   imageEngine === "grok"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -510,14 +502,14 @@ export default function ImageStudio() {
               <button
                 type="button"
                 onClick={() => setGenType("image")}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-9 items-center gap-1 rounded px-2.5 text-xs transition-colors ${
                   genType === "image"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
                 title="Image"
               >
-                <ImageIcon className="h-2.5 w-2.5" /> Image
+                <ImageIcon className="h-3.5 w-3.5" /> Image
               </button>
               <button
                 type="button"
@@ -526,14 +518,14 @@ export default function ImageStudio() {
                   setImageEngine("canva");
                   setEditImageDataUrl(null);
                 }}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-9 items-center gap-1 rounded px-2.5 text-xs transition-colors ${
                   genType === "video"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
                 title="Video (Canva only)"
               >
-                <Video className="h-2.5 w-2.5" /> Video
+                <Video className="h-3.5 w-3.5" /> Video
               </button>
             </div>
 
@@ -550,14 +542,14 @@ export default function ImageStudio() {
                 <button
                   type="button"
                   onClick={() => editFileRef.current?.click()}
-                  className={`flex h-5 items-center gap-1 rounded border px-1.5 text-[10px] transition-colors ${
+                  className={`flex h-9 items-center gap-1 rounded border px-2.5 text-xs transition-colors ${
                     editImageDataUrl
                       ? "border-[var(--info)]/40 bg-[var(--info)]/10 text-[var(--info)]"
                       : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                   }`}
                   title="Upload source image for Grok edit"
                 >
-                  <Crop className="h-2.5 w-2.5" />
+                  <Crop className="h-3.5 w-3.5" />
                   {editImageDataUrl ? "Edit src" : "Edit"}
                 </button>
                 {editImageDataUrl && (
@@ -567,10 +559,10 @@ export default function ImageStudio() {
                       setEditImageDataUrl(null);
                       if (editFileRef.current) editFileRef.current.value = "";
                     }}
-                    className="flex h-5 items-center rounded px-1 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--error)]"
+                    className="flex h-9 items-center rounded px-2 text-xs text-[var(--muted-foreground)] hover:text-[var(--error)]"
                     title="Clear edit source"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 )}
               </>
@@ -586,7 +578,7 @@ export default function ImageStudio() {
                   type="button"
                   onClick={() => setN(v)}
                   disabled={genType === "video"}
-                  className={`flex h-5 w-5 items-center justify-center rounded text-[10px] transition-colors disabled:opacity-40 ${
+                  className={`flex h-9 w-9 items-center justify-center rounded text-xs transition-colors disabled:opacity-40 ${
                     n === v && genType !== "video"
                       ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                       : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -607,7 +599,7 @@ export default function ImageStudio() {
                   <select
                     value={aspectRatio}
                     onChange={(e) => setAspectRatio(e.target.value)}
-                    className="h-7 w-16 appearance-none rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-5 font-mono text-[11px] text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
+                    className="h-9 w-20 appearance-none rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
                     title="Aspect Ratio"
                   >
                 {ASPECT_RATIOS.map((r) => (
