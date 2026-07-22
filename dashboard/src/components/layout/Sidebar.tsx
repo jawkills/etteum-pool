@@ -111,7 +111,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
         )}
       >
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-primary font-heading text-xs font-bold text-white shadow-[var(--glow)]">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-primary font-heading text-xs font-bold text-white">
             E
           </div>
           {!collapsed && (
@@ -131,7 +131,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
                     className="relative inline-flex h-1.5 w-1.5 rounded-full"
                     style={{
                       backgroundColor: wsMeta.color,
-                      boxShadow: `0 0 8px ${wsMeta.color}`,
+                      boxShadow: `0 0 4px ${wsMeta.color}`,
                     }}
                   />
                 </span>
@@ -177,7 +177,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
                         "flex items-center gap-3 text-sm transition-all duration-200",
                         collapsed ? "justify-center rounded-full px-2 py-2" : "rounded-full px-3 py-2",
                         isActive
-                          ? "bg-gradient-primary font-semibold text-white shadow-[var(--glow)]"
+                          ? "bg-gradient-primary font-semibold text-white"
                           : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                       )
                     }

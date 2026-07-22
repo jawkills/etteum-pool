@@ -61,11 +61,11 @@
   --chart-5: #fbbf24;
   --chart-6: #94a3b8;
 
-  /* Effects */
-  --glow: 0 0 20px -5px rgba(234, 88, 12, 0.5);
-  --glow-strong: 0 0 30px -5px rgba(247, 147, 26, 0.6);
-  --glow-gold: 0 0 16px rgba(255, 214, 0, 0.35);
-  --shadow-card: 0 0 40px -12px rgba(247, 147, 26, 0.12);
+  /* Effects — soft, not neon floodlights */
+  --glow: 0 0 10px -4px rgba(234, 88, 12, 0.22);
+  --glow-strong: 0 0 14px -4px rgba(247, 147, 26, 0.32);
+  --glow-gold: 0 0 8px rgba(255, 214, 0, 0.18);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 20px -12px rgba(247, 147, 26, 0.08);
   --gradient-primary: linear-gradient(90deg, #ea580c, #f7931a);
   --gradient-gold-text: linear-gradient(90deg, #f7931a, #ffd600);
 

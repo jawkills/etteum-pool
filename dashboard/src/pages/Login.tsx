@@ -45,9 +45,9 @@ export default function Login({ onLogin }: LoginProps) {
       <div className="pointer-events-none absolute -top-24 right-10 h-64 w-64 rounded-full bg-[var(--primary)] opacity-10 blur-[120px]" />
       <div className="pointer-events-none absolute -bottom-20 left-8 h-56 w-56 rounded-full bg-[var(--gold)] opacity-[0.07] blur-[100px]" />
 
-      <Card className="relative w-full max-w-sm border-[var(--border)] shadow-[var(--glow)]">
+      <Card className="relative w-full max-w-sm border-[var(--border)] shadow-[var(--shadow-card)]">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-primary shadow-[var(--glow)]">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-primary">
             <Lock className="h-5 w-5 text-white" />
           </div>
           <CardTitle className="font-heading text-xl">Etteum</CardTitle>

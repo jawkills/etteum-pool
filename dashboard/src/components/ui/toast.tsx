@@ -17,7 +17,7 @@ export function Toaster() {
         <div
           key={t.id}
           className={cn(
-            "pointer-events-auto rounded-xl border bg-[var(--card)] p-3 shadow-[var(--glow)]",
+            "pointer-events-auto rounded-xl border bg-[var(--card)] p-3 shadow-[var(--shadow-card)]",
             toneClass[t.tone]
           )}
         >

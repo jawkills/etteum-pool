@@ -13,7 +13,7 @@ interface StatCardProps {
 
 export function StatCard({ label, value, subtitle, icon, emphasize, className }: StatCardProps) {
   return (
-    <Card className={cn(emphasize && "border-[var(--primary)]/40 shadow-[var(--glow)]", className)}>
+    <Card className={cn(emphasize && "border-[var(--primary)]/40", className)}>
       <CardContent className="p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
