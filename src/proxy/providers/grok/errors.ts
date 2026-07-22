@@ -5,7 +5,7 @@ import {
   isMissingCredentialMessage,
   isPermanentRevocation,
 } from "../../account-health";
-import { GROK_CREDIT_SOFT_ERROR, GROK_TOKEN_LIMIT } from "./constants";
+import { GROK_CREDIT_SOFT_ERROR } from "./constants";
 
 export type GrokErrorKind = "exhausted" | "dead" | "auth" | "rate_limited" | null;
 
@@ -211,6 +211,7 @@ export function quotaFromGrokCenterSignals(opts: {
   const exhaustedBody = parseGrokExhaustedBody(opts.body || "");
   const kind = classifyGrokError(opts.status ?? 0, opts.body || "");
 
+  // Prefer explicit body numbers (actual/limit) — center free-window truth.
   if (exhaustedBody) {
     return {
       limit: exhaustedBody.limit,
@@ -222,10 +223,12 @@ export function quotaFromGrokCenterSignals(opts: {
     };
   }
 
-  if (rl.limitTokens != null || rl.remainingTokens != null) {
-    const limit =
-      rl.limitTokens != null && rl.limitTokens > 0 ? rl.limitTokens : GROK_TOKEN_LIMIT;
-    const remaining = rl.remainingTokens != null ? Math.max(0, rl.remainingTokens) : limit;
+  // Headers only count when limit is present. Never invent a fake ceiling
+  // (old bug: fallback 2_000_000 when center only sent remaining).
+  if (rl.limitTokens != null && rl.limitTokens > 0) {
+    const limit = rl.limitTokens;
+    const remaining =
+      rl.remainingTokens != null ? Math.max(0, rl.remainingTokens) : limit;
     const used = Math.max(0, limit - remaining);
     return {
       limit,
@@ -237,17 +240,8 @@ export function quotaFromGrokCenterSignals(opts: {
     };
   }
 
-  if (kind === "exhausted") {
-    return {
-      limit: GROK_TOKEN_LIMIT,
-      remaining: 0,
-      used: GROK_TOKEN_LIMIT,
-      resetAt: null,
-      source: "upstream-exhausted",
-      exhausted: true,
-    };
-  }
-
+  // Exhausted without parseable numbers: caller marks remaining=0 only;
+  // do not invent limit (warmup preserves prior quota_limit when quota omitted).
   return null;
 }
 

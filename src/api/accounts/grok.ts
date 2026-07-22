@@ -10,7 +10,7 @@ import { accounts } from "../../db/schema";
 import { encrypt } from "../../utils/crypto";
 import { broadcast } from "../../ws/index";
 import { pool, type ProviderName } from "../../proxy/pool";
-import { normalizeGrokCpa, GROK_TOKEN_LIMIT } from "../../proxy/providers/grok";
+import { normalizeGrokCpa } from "../../proxy/providers/grok";
 import { grokFarmQueue } from "../../auth/grok-farm/farm-queue";
 import { grokReauthQueue } from "../../auth/grok-farm/reauth-queue";
 import { isPlaceholderPassword } from "../../proxy/account-health";
@@ -107,8 +107,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
             tokens: tokensJson as unknown,
             status: "active",
             enabled: true,
-            quotaLimit: GROK_TOKEN_LIMIT,
-            quotaRemaining: existing.quotaRemaining ?? GROK_TOKEN_LIMIT,
+            quotaLimit: 0, // unknown until center headers
+            quotaRemaining: existing.quotaRemaining ?? 0,
             errorMessage: null,
             updatedAt: new Date(),
           };
@@ -135,8 +135,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
               tokens: tokensJson as unknown,
               status: "active",
               enabled: true,
-              quotaLimit: GROK_TOKEN_LIMIT,
-              quotaRemaining: GROK_TOKEN_LIMIT,
+              quotaLimit: 0, // unknown until center headers
+              quotaRemaining: 0,
             })
             .returning();
           const created = inserted[0]!;
@@ -322,8 +322,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
               tokens: tokensJson as unknown,
               status: "active",
               enabled: true,
-              quotaLimit: GROK_TOKEN_LIMIT,
-              quotaRemaining: existing.quotaRemaining ?? GROK_TOKEN_LIMIT,
+              quotaLimit: 0, // unknown until center headers
+              quotaRemaining: existing.quotaRemaining ?? 0,
               errorMessage: null,
               updatedAt: new Date(),
             })
@@ -340,8 +340,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
               tokens: tokensJson as unknown,
               status: "active",
               enabled: true,
-              quotaLimit: GROK_TOKEN_LIMIT,
-              quotaRemaining: GROK_TOKEN_LIMIT,
+              quotaLimit: 0, // unknown until center headers
+              quotaRemaining: 0,
             })
             .returning();
           const created = inserted[0]!;

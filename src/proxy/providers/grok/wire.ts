@@ -10,7 +10,6 @@ import {
   GROK_CLIENT_ID,
   GROK_CREDIT_SOFT_ERROR,
   GROK_IMAGE_TIMEOUT_MS,
-  GROK_TOKEN_LIMIT,
   GROK_TOKEN_URL,
   GROK_UPSTREAM_BASE,
 } from "./constants";
@@ -622,6 +621,11 @@ export async function grokChatCompletionStream(
   };
 }
 
+/**
+ * Local fallback when center does not return ratelimit headers/body.
+ * Only mirrors what we already stored — never invents a fake ceiling.
+ * limit=0 means "unknown" (warmup will not clobber prior DB values with -1/sentinel).
+ */
 export function localEstimatedQuota(account: Account): {
   quota: {
     limit: number;
@@ -631,15 +635,20 @@ export function localEstimatedQuota(account: Account): {
     source: "local-estimated";
   };
 } {
-  const limit =
-    Number(account.quotaLimit) > 0 ? Number(account.quotaLimit) : GROK_TOKEN_LIMIT;
+  const storedLimit = Number(account.quotaLimit);
+  const limit = Number.isFinite(storedLimit) && storedLimit > 0 ? storedLimit : 0;
   const remainingRaw = account.quotaRemaining;
-  const remaining = typeof remainingRaw === "number" ? remainingRaw : limit;
-  const used = Math.max(0, limit - remaining);
+  const remaining =
+    typeof remainingRaw === "number" && Number.isFinite(remainingRaw)
+      ? Math.max(0, remainingRaw)
+      : limit > 0
+        ? limit
+        : 0;
+  const used = limit > 0 ? Math.max(0, limit - remaining) : 0;
   return {
     quota: {
       limit,
-      remaining: Math.max(0, remaining),
+      remaining,
       used,
       resetAt: null,
       source: "local-estimated",

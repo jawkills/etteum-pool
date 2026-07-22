@@ -16,10 +16,10 @@ import {
   stripGrokDataUrlPrefix,
   parseGrokRateLimitHeaders,
   parseGrokExhaustedBody,
+  quotaFromGrokCenterSignals,
   normalizeGrokMessagesForOpenAI,
   grokContentBlocksToText,
   parseRetryAfterMs,
-  GROK_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
   GROK_CREDIT_SOFT_ERROR,
 } from "./index";
@@ -406,9 +406,49 @@ describe("formatGrokAuthFailure", () => {
   });
 });
 
-describe("constants", () => {
-  test("token limit is 2M", () => {
-    expect(GROK_TOKEN_LIMIT).toBe(2_000_000);
+describe("quota is center-sourced (no hardcoded ceiling)", () => {
+  test("quotaFromGrokCenterSignals does not invent limit without headers/body", () => {
+    expect(quotaFromGrokCenterSignals({ status: 200, body: "ok", headers: {} })).toBeNull();
+  });
+
+  test("headers with limit-tokens win", () => {
+    const q = quotaFromGrokCenterSignals({
+      status: 200,
+      body: "",
+      headers: {
+        "x-ratelimit-limit-tokens": "1000000",
+        "x-ratelimit-remaining-tokens": "420000",
+      },
+    });
+    expect(q).toEqual({
+      limit: 1_000_000,
+      remaining: 420_000,
+      used: 580_000,
+      resetAt: null,
+      source: "upstream-headers",
+      exhausted: false,
+    });
+  });
+
+  test("remaining-only headers do not invent a fake limit", () => {
+    const q = quotaFromGrokCenterSignals({
+      status: 200,
+      body: "",
+      headers: { "x-ratelimit-remaining-tokens": "420000" },
+    });
+    expect(q).toBeNull();
+  });
+
+  test("body actual/limit is authoritative", () => {
+    const q = quotaFromGrokCenterSignals({
+      status: 429,
+      body: "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000",
+      headers: {},
+    });
+    expect(q?.limit).toBe(1_000_000);
+    expect(q?.remaining).toBe(0);
+    expect(q?.source).toBe("upstream-body");
+    expect(q?.exhausted).toBe(true);
   });
 });
 

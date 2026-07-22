@@ -21,7 +21,6 @@ import { getCachedGrokRuntimeSettings } from "./settings";
 
 // --- pure modules (re-exported for stable public API) ---
 export {
-  GROK_TOKEN_LIMIT,
   GROK_UPSTREAM_BASE,
   GROK_TOKEN_URL,
   GROK_CLIENT_ID,
@@ -34,7 +33,6 @@ export {
 } from "./constants";
 // legacy constant aliases (map to new names)
 export {
-  GROK_TOKEN_LIMIT as GROK_CLI_TOKEN_LIMIT,
   GROK_UPSTREAM_BASE as GROK_CLI_UPSTREAM_BASE,
   GROK_TOKEN_URL as GROK_CLI_TOKEN_URL,
   GROK_CLIENT_ID as GROK_CLI_CLIENT_ID,
@@ -142,10 +140,7 @@ export {
   isGrokCliSettingKey,
 } from "./settings";
 
-import {
-  GROK_TOKEN_LIMIT,
-  GROK_CREDIT_SOFT_ERROR,
-} from "./constants";
+import { GROK_CREDIT_SOFT_ERROR } from "./constants";
 import { type GrokTokens } from "./auth";
 import {
   GROK_CATALOG_IDS,
@@ -538,6 +533,10 @@ export class GrokProvider extends BaseProvider {
       (q != null && Number(q.remaining) <= 0 && Number(q.limit) > 0);
 
     if (exhausted) {
+      // Prefer center numbers. If missing, only zero remaining — never invent limit.
+      const storedLimit = Number(working.quotaLimit);
+      const limitFromStore =
+        Number.isFinite(storedLimit) && storedLimit > 0 ? storedLimit : 0;
       return {
         kind: "exhausted",
         success: true,
@@ -551,13 +550,15 @@ export class GrokProvider extends BaseProvider {
               resetAt: q.resetAt ?? null,
               source: q.source || "grok.fetchQuota",
             }
-          : {
-              limit: GROK_TOKEN_LIMIT,
-              remaining: 0,
-              used: GROK_TOKEN_LIMIT,
-              resetAt: null,
-              source: "upstream-exhausted",
-            },
+          : limitFromStore > 0
+            ? {
+                limit: limitFromStore,
+                remaining: 0,
+                used: limitFromStore,
+                resetAt: null,
+                source: "local-exhausted",
+              }
+            : undefined,
       };
     }
 

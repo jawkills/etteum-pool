@@ -10,7 +10,13 @@
 
 import { DEFAULT_GROK_REFRESH_LEAD_SEC } from "./settings";
 
-export const GROK_TOKEN_LIMIT = 2_000_000;
+/**
+ * Quota limit is NEVER hardcoded.
+ * Free-window truth comes only from cli-chat-proxy:
+ *   - x-ratelimit-limit-tokens / x-ratelimit-remaining-tokens
+ *   - body: tokens (actual/limit): N/M
+ * Until center reports a limit, DB stays 0 (unknown).
+ */
 
 export const GROK_UPSTREAM_BASE =
   (
