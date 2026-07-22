@@ -7,29 +7,29 @@ import type { Account } from "../../../db/schema";
 import { config } from "../../../config";
 import type { ChatCompletionRequest, ChatCompletionResponse, ProviderResult } from "../base";
 import {
-  GROK_CLI_CLIENT_ID,
-  GROK_CLI_CREDIT_SOFT_ERROR,
-  GROK_CLI_IMAGE_TIMEOUT_MS,
-  GROK_CLI_TOKEN_LIMIT,
-  GROK_CLI_TOKEN_URL,
-  GROK_CLI_UPSTREAM_BASE,
+  GROK_CLIENT_ID,
+  GROK_CREDIT_SOFT_ERROR,
+  GROK_IMAGE_TIMEOUT_MS,
+  GROK_TOKEN_LIMIT,
+  GROK_TOKEN_URL,
+  GROK_UPSTREAM_BASE,
 } from "./constants";
-import { type GrokCliTokens, normalizeGrokCliCpa } from "./cpa";
+import { type GrokTokens, normalizeGrokCpa } from "./auth";
 import {
-  classifyGrokCliError,
+  classifyGrokError,
   parseRetryAfterMs,
-  quotaFromGrokCliCenterSignals,
+  quotaFromGrokCenterSignals,
 } from "./errors";
 import {
-  type GrokCliImageRequestOpts,
-  type GrokCliImageResult,
-  type GrokCliUsageNormalized,
-  addGrokCliUsage,
-  emptyGrokCliUsage,
-  extractGrokCliImageGenerationResults,
-  normalizeGrokCliUsage,
+  type GrokImageRequestOpts,
+  type GrokImageResult,
+  type GrokUsageNormalized,
+  addGrokUsage,
+  emptyGrokUsage,
+  extractGrokImageGenerationResults,
+  normalizeGrokUsage,
 } from "./image";
-import { normalizeGrokCliMessagesForOpenAI } from "./messages";
+import { normalizeGrokMessagesForOpenAI } from "./messages";
 import { parseGrokModelId, resolveGrokUpstreamModel } from "./models";
 import { buildGrokHeaders } from "./headers";
 import {
@@ -37,6 +37,12 @@ import {
   translateResponsesSseToChatSse,
   jsonResponsesToChatCompletion,
 } from "./responses";
+import {
+  enrichTools,
+  isUnknownToolError,
+  stripInjectedBuiltins,
+} from "./tools";
+import { getCachedGrokRuntimeSettings } from "./settings";
 
 export type FetchWithTimeout = (
   url: string,
@@ -52,12 +58,12 @@ export type UpstreamPipe = (
   | { ok: false; error: string; deadAccount: boolean; tokensJson?: string }
 >;
 
-export function readGrokCliTokens(account: Account): GrokCliTokens | null {
+export function readGrokTokens(account: Account): GrokTokens | null {
   try {
     const raw =
       typeof account.tokens === "string" ? JSON.parse(account.tokens as string) : account.tokens;
     if (!raw?.access_token) return null;
-    return { ...raw, email: raw.email || account.email } as GrokCliTokens;
+    return { ...raw, email: raw.email || account.email } as GrokTokens;
   } catch {
     return null;
   }
@@ -72,9 +78,10 @@ export function parsePersistedTokens(tokensJson?: string): unknown | undefined {
   }
 }
 
-export function prepareGrokCliChatRequest(
-  request: ChatCompletionRequest
-): ChatCompletionRequest {
+export function prepareGrokChatRequest(
+  request: ChatCompletionRequest,
+  settings = getCachedGrokRuntimeSettings()
+): { request: ChatCompletionRequest; toolsPlan: ReturnType<typeof enrichTools> } {
   let stripped = request;
   if (request.tools?.length) {
     const cleaned = request.tools.filter(
@@ -84,15 +91,18 @@ export function prepareGrokCliChatRequest(
       stripped = { ...request, tools: cleaned };
     }
   }
-  return {
+  const toolsPlan = enrichTools(stripped.tools, settings);
+  const withTools: ChatCompletionRequest = {
     ...stripped,
-    messages: normalizeGrokCliMessagesForOpenAI(
+    messages: normalizeGrokMessagesForOpenAI(
       stripped.messages
     ) as ChatCompletionRequest["messages"],
+    tools: toolsPlan.tools,
   };
+  return { request: withTools, toolsPlan };
 }
 
-export function failGrokCliChat(
+export function failGrokChat(
   error: string,
   opts?: {
     deadAccount?: boolean;
@@ -113,7 +123,7 @@ export function failGrokCliChat(
   };
 }
 
-export function failGrokCliImage(
+export function failGrokImage(
   error: string,
   opts?: {
     deadAccount?: boolean;
@@ -122,7 +132,7 @@ export function failGrokCliImage(
     retryAfterMs?: number;
     tokens?: unknown;
   }
-): GrokCliImageResult {
+): GrokImageResult {
   return {
     success: false,
     error,
@@ -132,56 +142,49 @@ export function failGrokCliImage(
   };
 }
 
-/**
- * Whether to use the OpenAI Responses API endpoint for Grok chat.
- *
- * Default: true. The legacy /chat/completions path on cli-chat-proxy.grok.com
- * silently terminates after the reasoning phase for many interactive sessions,
- * which surfaces to clients as "grok thinks then dies". The Responses API
- * (/v1/responses) is the path the official grok-shell client and 9router use.
- *
- * Set GROK_CLI_USE_RESPONSES_API=false to fall back to the legacy endpoint
- * (e.g. for emergency rollback without a redeploy).
- */
-const USE_RESPONSES_API =
-  String(process.env.GROK_CLI_USE_RESPONSES_API ?? "true").toLowerCase() !== "false";
-
-export async function grokCliUpstreamChat(
+export async function grokUpstreamChat(
   fetchWithTimeout: FetchWithTimeout,
   account: Account,
-  request: ChatCompletionRequest
-): Promise<{ response: Response; tokens: GrokCliTokens }> {
-  const tokens = readGrokCliTokens(account);
+  request: ChatCompletionRequest,
+  opts?: {
+    toolsOverride?: any[];
+    sessionSeed?: string;
+  }
+): Promise<{ response: Response; tokens: GrokTokens }> {
+  const tokens = readGrokTokens(account);
   if (!tokens?.access_token) throw new Error("No access_token for grok account");
 
-  const req = prepareGrokCliChatRequest(request);
+  const prepared = prepareGrokChatRequest(request);
+  const req = prepared.request;
   const parsed = parseGrokModelId(req.model);
   const model = parsed.upstream;
 
-  // Build body in the wire format the active endpoint expects.
-  let endpointPath: string;
-  let bodyObj: Record<string, unknown>;
-  if (USE_RESPONSES_API) {
-    // Responses API: translate OpenAI Chat Completions request shape.
-    endpointPath = "/responses";
-    bodyObj = translateChatRequestToResponses(req) as unknown as Record<string, unknown>;
-  } else {
-    // Legacy fallback: original Chat Completions body construction.
-    endpointPath = "/chat/completions";
-    bodyObj = { ...req, model, stream: !!req.stream };
-    if (parsed.effortFromModelId && parsed.effort) {
-      bodyObj.reasoning_effort = parsed.effort;
-    } else if (bodyObj.reasoning_effort != null || (bodyObj as any).reasoningEffort != null) {
-      const raw = String(bodyObj.reasoning_effort ?? (bodyObj as any).reasoningEffort).toLowerCase();
-      if (raw === "max") bodyObj.reasoning_effort = "xhigh";
+  // Responses API only — legacy chat/completions path removed (thinks-then-dies).
+  const bodyObj = translateChatRequestToResponses(req) as unknown as Record<string, unknown>;
+  if (opts?.toolsOverride !== undefined) {
+    if (opts.toolsOverride && opts.toolsOverride.length > 0) {
+      bodyObj.tools = opts.toolsOverride;
+    } else {
+      delete bodyObj.tools;
     }
   }
 
+  const sessionSeed =
+    opts?.sessionSeed ||
+    (typeof (req as any).prompt_cache_key === "string"
+      ? (req as any).prompt_cache_key
+      : undefined);
+
   const response = await fetchWithTimeout(
-    `${GROK_CLI_UPSTREAM_BASE}${endpointPath}`,
+    `${GROK_UPSTREAM_BASE}/responses`,
     {
       method: "POST",
-      headers: buildGrokHeaders({ ...tokens, email: account.email }, req.model || model),
+      headers: buildGrokHeaders(
+        { ...tokens, email: account.email },
+        req.model || model,
+        undefined,
+        sessionSeed ? { sessionSeed } : {}
+      ),
       body: JSON.stringify(bodyObj),
     },
     config.providerRequestTimeoutMs
@@ -189,12 +192,12 @@ export async function grokCliUpstreamChat(
   return { response, tokens };
 }
 
-export async function grokCliUpstreamImage(
+export async function grokUpstreamImage(
   fetchWithTimeout: FetchWithTimeout,
   account: Account,
   opts: { prompt: string; images?: string[]; model?: string }
-): Promise<{ response: Response; tokens: GrokCliTokens }> {
-  const tokens = readGrokCliTokens(account);
+): Promise<{ response: Response; tokens: GrokTokens }> {
+  const tokens = readGrokTokens(account);
   if (!tokens?.access_token) throw new Error("No access_token for grok account");
 
   const model = resolveGrokUpstreamModel(opts.model || "grok-4.5");
@@ -218,39 +221,39 @@ export async function grokCliUpstreamImage(
   };
 
   const response = await fetchWithTimeout(
-    `${GROK_CLI_UPSTREAM_BASE}/responses`,
+    `${GROK_UPSTREAM_BASE}/responses`,
     {
       method: "POST",
       headers: buildGrokHeaders({ ...tokens, email: account.email }, model),
       body: JSON.stringify(body),
     },
-    GROK_CLI_IMAGE_TIMEOUT_MS
+    GROK_IMAGE_TIMEOUT_MS
   );
   return { response, tokens };
 }
 
-export async function grokCliDoRefresh(
+export async function grokDoRefresh(
   fetchWithTimeout: FetchWithTimeout,
   account: Account
 ): Promise<{ success: boolean; tokens?: string; error?: string }> {
-  const tokens = readGrokCliTokens(account);
+  const tokens = readGrokTokens(account);
   if (!tokens?.refresh_token) return { success: false, error: "No refresh_token" };
 
   try {
     const form = new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: tokens.client_id || GROK_CLI_CLIENT_ID,
+      client_id: tokens.client_id || GROK_CLIENT_ID,
       refresh_token: tokens.refresh_token,
     });
 
     const response = await fetchWithTimeout(
-      GROK_CLI_TOKEN_URL,
+      GROK_TOKEN_URL,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           Accept: "application/json",
-          "User-Agent": "grok-cli/proxy",
+          "User-Agent": "grok-shell/proxy",
         },
         body: form.toString(),
       },
@@ -259,7 +262,7 @@ export async function grokCliDoRefresh(
 
     const text = await response.text();
     if (!response.ok) {
-      const kind = classifyGrokCliError(response.status, text);
+      const kind = classifyGrokError(response.status, text);
       return {
         success: false,
         error:
@@ -273,7 +276,7 @@ export async function grokCliDoRefresh(
     if (!data.access_token) return { success: false, error: "No access_token in refresh response" };
 
     const expiresIn = Number(data.expires_in) || 21600;
-    const next: GrokCliTokens = {
+    const next: GrokTokens = {
       ...tokens,
       access_token: data.access_token,
       refresh_token: data.refresh_token || tokens.refresh_token,
@@ -284,7 +287,7 @@ export async function grokCliDoRefresh(
 
     if (next.id_token) {
       try {
-        const normalized = normalizeGrokCliCpa({
+        const normalized = normalizeGrokCpa({
           email: next.email,
           access_token: next.access_token,
           refresh_token: next.refresh_token,
@@ -303,30 +306,30 @@ export async function grokCliDoRefresh(
   }
 }
 
-export async function grokCliRunImageOnce(
+export async function grokRunImageOnce(
   withUpstream: UpstreamPipe,
   account: Account,
   opts: { prompt: string; images?: string[]; model?: string },
   fetchWithTimeout: FetchWithTimeout
-): Promise<GrokCliImageResult> {
+): Promise<GrokImageResult> {
   const pipe = await withUpstream(account, async (working) => {
-    const { response } = await grokCliUpstreamImage(fetchWithTimeout, working, opts);
+    const { response } = await grokUpstreamImage(fetchWithTimeout, working, opts);
     return response;
   });
   if (!pipe.ok) {
-    return failGrokCliImage(pipe.error, {
+    return failGrokImage(pipe.error, {
       deadAccount: pipe.deadAccount,
       tokens: parsePersistedTokens(pipe.tokensJson),
     });
   }
 
   const text = await pipe.response.text();
-  const kind = classifyGrokCliError(pipe.response.status, text);
+  const kind = classifyGrokError(pipe.response.status, text);
   const parsedTokens = parsePersistedTokens(pipe.tokensJson);
   if (!pipe.response.ok) {
-    return failGrokCliImage(
+    return failGrokImage(
       kind === "exhausted"
-        ? GROK_CLI_CREDIT_SOFT_ERROR
+        ? GROK_CREDIT_SOFT_ERROR
         : kind === "rate_limited"
           ? `Grok capacity/rate-limit (image HTTP ${pipe.response.status})`
           : `Grok image HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
@@ -342,17 +345,17 @@ export async function grokCliRunImageOnce(
   try {
     data = JSON.parse(text);
   } catch {
-    return failGrokCliImage("Invalid JSON from Grok image upstream");
+    return failGrokImage("Invalid JSON from Grok image upstream");
   }
 
-  const imagesB64 = extractGrokCliImageGenerationResults(data);
+  const imagesB64 = extractGrokImageGenerationResults(data);
   if (imagesB64.length === 0) {
-    return failGrokCliImage("No image_generation_call result in upstream response", {
+    return failGrokImage("No image_generation_call result in upstream response", {
       tokens: parsedTokens,
     });
   }
 
-  const usage = normalizeGrokCliUsage((data as any)?.usage);
+  const usage = normalizeGrokUsage((data as any)?.usage);
   return {
     success: true,
     imagesB64,
@@ -361,24 +364,24 @@ export async function grokCliRunImageOnce(
   };
 }
 
-export async function grokCliImageRequest(
+export async function grokImageRequest(
   withUpstream: UpstreamPipe,
   account: Account,
-  opts: GrokCliImageRequestOpts,
+  opts: GrokImageRequestOpts,
   fetchWithTimeout: FetchWithTimeout
-): Promise<GrokCliImageResult> {
+): Promise<GrokImageResult> {
   const prompt = (opts.prompt || "").trim();
   if (!prompt) return { success: false, error: "prompt is required" };
   const images = (opts.images || []).filter(Boolean).slice(0, 3);
   const n = Math.min(4, Math.max(1, Number(opts.n) || 1));
 
   const all: string[] = [];
-  let usageSum: GrokCliUsageNormalized = emptyGrokCliUsage();
+  let usageSum: GrokUsageNormalized = emptyGrokUsage();
   let lastTokens: unknown;
   let working = account;
 
   for (let i = 0; i < n; i++) {
-    const one = await grokCliRunImageOnce(
+    const one = await grokRunImageOnce(
       withUpstream,
       working,
       {
@@ -397,7 +400,7 @@ export async function grokCliImageRequest(
       return one;
     }
     all.push(...one.imagesB64);
-    if (one.usage) usageSum = addGrokCliUsage(usageSum, one.usage);
+    if (one.usage) usageSum = addGrokUsage(usageSum, one.usage);
   }
 
   return {
@@ -408,7 +411,7 @@ export async function grokCliImageRequest(
   };
 }
 
-export async function grokCliChatCompletion(
+export async function grokChatCompletion(
   withUpstream: UpstreamPipe,
   account: Account,
   request: ChatCompletionRequest,
@@ -417,24 +420,57 @@ export async function grokCliChatCompletion(
   generateId: () => string
 ): Promise<ProviderResult> {
   const nonStreamReq = { ...request, stream: false };
-  const pipe = await withUpstream(account, async (working) => {
-    const { response } = await grokCliUpstreamChat(fetchWithTimeout, working, nonStreamReq);
-    return response;
-  });
+  const settings = getCachedGrokRuntimeSettings();
+  const prepared = prepareGrokChatRequest(nonStreamReq, settings);
+  let toolsOverride = prepared.toolsPlan.tools;
+  let searchDegraded = false;
+  let injected = prepared.toolsPlan.injectedBuiltins;
+
+  const runOnce = async (tools: any[] | undefined) => {
+    return withUpstream(account, async (working) => {
+      const { response } = await grokUpstreamChat(fetchWithTimeout, working, nonStreamReq, {
+        toolsOverride: tools,
+      });
+      return response;
+    });
+  };
+
+  let pipe = await runOnce(toolsOverride);
   if (!pipe.ok) {
-    return failGrokCliChat(pipe.error, {
+    return failGrokChat(pipe.error, {
       deadAccount: pipe.deadAccount,
       tokens: parsePersistedTokens(pipe.tokensJson),
     });
   }
 
+  if (
+    !pipe.response.ok &&
+    injected.length > 0 &&
+    (await (async () => {
+      const peek = await pipe.response.clone().text().catch(() => "");
+      return isUnknownToolError(pipe.response.status, peek);
+    })())
+  ) {
+    toolsOverride = stripInjectedBuiltins(toolsOverride, injected);
+    injected = [];
+    searchDegraded = true;
+    console.warn("[Grok] search tools rejected by upstream; retrying without built-ins");
+    pipe = await runOnce(toolsOverride);
+    if (!pipe.ok) {
+      return failGrokChat(pipe.error, {
+        deadAccount: pipe.deadAccount,
+        tokens: parsePersistedTokens(pipe.tokensJson),
+      });
+    }
+  }
+
   const text = await pipe.response.text();
-  const kind = classifyGrokCliError(pipe.response.status, text);
+  const kind = classifyGrokError(pipe.response.status, text);
   const parsedTokens = parsePersistedTokens(pipe.tokensJson);
   if (!pipe.response.ok) {
-    return failGrokCliChat(
+    return failGrokChat(
       kind === "exhausted"
-        ? GROK_CLI_CREDIT_SOFT_ERROR
+        ? GROK_CREDIT_SOFT_ERROR
         : kind === "rate_limited"
           ? `Grok capacity/rate-limit (HTTP ${pipe.response.status})`
           : `Grok HTTP ${pipe.response.status}: ${text.slice(0, 300)}`,
@@ -455,26 +491,7 @@ export async function grokCliChatCompletion(
     return { success: false, error: "Invalid JSON from Grok upstream" };
   }
 
-  // Normalize the upstream response into OpenAI Chat Completions shape.
-  // Responses API returns { output, usage: { input_tokens, output_tokens } };
-  // the legacy Chat Completions path returns { choices, usage: { prompt_tokens } }.
-  let chat: ChatCompletionResponse;
-  if (USE_RESPONSES_API || Array.isArray(data.output)) {
-    chat = jsonResponsesToChatCompletion(data, request.model);
-  } else {
-    chat = {
-      id: data.id || generateId(),
-      object: "chat.completion",
-      created: data.created || Math.floor(Date.now() / 1000),
-      model: request.model,
-      choices: data.choices || [],
-      usage: {
-        prompt_tokens: Number(data.usage?.prompt_tokens) || 0,
-        completion_tokens: Number(data.usage?.completion_tokens) || 0,
-        total_tokens: Number(data.usage?.total_tokens) || 0,
-      },
-    };
-  }
+  const chat = jsonResponsesToChatCompletion(data, request.model);
 
   const usage = chat.usage || {};
   const promptTokens =
@@ -499,6 +516,10 @@ export async function grokCliChatCompletion(
     },
   };
 
+  if (searchDegraded) {
+    console.warn("[Grok] completed with searchDegraded=true");
+  }
+
   return {
     success: true,
     response: resp,
@@ -511,32 +532,65 @@ export async function grokCliChatCompletion(
   };
 }
 
-export async function grokCliChatCompletionStream(
+export async function grokChatCompletionStream(
   withUpstream: UpstreamPipe,
   account: Account,
   request: ChatCompletionRequest,
   fetchWithTimeout: FetchWithTimeout
 ): Promise<ProviderResult> {
   const streamReq = { ...request, stream: true };
-  const pipe = await withUpstream(account, async (working) => {
-    const { response } = await grokCliUpstreamChat(fetchWithTimeout, working, streamReq);
-    return response;
-  });
+  const settings = getCachedGrokRuntimeSettings();
+  const prepared = prepareGrokChatRequest(streamReq, settings);
+  let toolsOverride = prepared.toolsPlan.tools;
+  let injected = prepared.toolsPlan.injectedBuiltins;
+  let searchDegraded = false;
+
+  const runOnce = async (tools: any[] | undefined) => {
+    return withUpstream(account, async (working) => {
+      const { response } = await grokUpstreamChat(fetchWithTimeout, working, streamReq, {
+        toolsOverride: tools,
+      });
+      return response;
+    });
+  };
+
+  let pipe = await runOnce(toolsOverride);
   if (!pipe.ok) {
-    return failGrokCliChat(pipe.error, {
+    return failGrokChat(pipe.error, {
       deadAccount: pipe.deadAccount,
       tokens: parsePersistedTokens(pipe.tokensJson),
     });
+  }
+
+  if (
+    !pipe.response.ok &&
+    injected.length > 0 &&
+    (await (async () => {
+      const peek = await pipe.response.clone().text().catch(() => "");
+      return isUnknownToolError(pipe.response.status, peek);
+    })())
+  ) {
+    toolsOverride = stripInjectedBuiltins(toolsOverride, injected);
+    injected = [];
+    searchDegraded = true;
+    console.warn("[Grok] search tools rejected by upstream (stream); retrying without built-ins");
+    pipe = await runOnce(toolsOverride);
+    if (!pipe.ok) {
+      return failGrokChat(pipe.error, {
+        deadAccount: pipe.deadAccount,
+        tokens: parsePersistedTokens(pipe.tokensJson),
+      });
+    }
   }
 
   const response = pipe.response;
   const parsedTokens = parsePersistedTokens(pipe.tokensJson);
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
-    const kind = classifyGrokCliError(response.status, text);
-    return failGrokCliChat(
+    const kind = classifyGrokError(response.status, text);
+    return failGrokChat(
       kind === "exhausted"
-        ? GROK_CLI_CREDIT_SOFT_ERROR
+        ? GROK_CREDIT_SOFT_ERROR
         : kind === "rate_limited"
           ? `Grok capacity/rate-limit (stream HTTP ${response.status})`
           : `Grok stream HTTP ${response.status}: ${text.slice(0, 300)}`,
@@ -550,16 +604,13 @@ export async function grokCliChatCompletionStream(
     );
   }
 
-  // When talking to the Responses API, the upstream SSE uses Responses event
-  // types (response.output_text.delta, response.reasoning_summary_text.delta,
-  // response.completed, ...). Wrap it in a translator so downstream consumers
-  // (wrapStreamWithUsageFinalizer, openAIStreamToAnthropic) still see standard
-  // OpenAI Chat Completions SSE chunks. The legacy endpoint already emits
-  // Chat Completions SSE so we pass it through unchanged.
-  const upstreamBody = response.body;
-  const stream = USE_RESPONSES_API && upstreamBody
-    ? translateResponsesSseToChatSse(upstreamBody, { model: request.model })
-    : upstreamBody;
+  if (searchDegraded) {
+    console.warn("[Grok] stream completed with searchDegraded=true");
+  }
+
+  const stream = response.body
+    ? translateResponsesSseToChatSse(response.body, { model: request.model })
+    : response.body;
 
   return {
     success: true,
@@ -581,7 +632,7 @@ export function localEstimatedQuota(account: Account): {
   };
 } {
   const limit =
-    Number(account.quotaLimit) > 0 ? Number(account.quotaLimit) : GROK_CLI_TOKEN_LIMIT;
+    Number(account.quotaLimit) > 0 ? Number(account.quotaLimit) : GROK_TOKEN_LIMIT;
   const remainingRaw = account.quotaRemaining;
   const remaining = typeof remainingRaw === "number" ? remainingRaw : limit;
   const used = Math.max(0, limit - remaining);
@@ -596,7 +647,7 @@ export function localEstimatedQuota(account: Account): {
   };
 }
 
-export async function grokCliFetchQuota(
+export async function grokFetchQuota(
   fetchWithTimeout: FetchWithTimeout,
   account: Account
 ): Promise<{
@@ -611,7 +662,7 @@ export async function grokCliFetchQuota(
   exhausted?: boolean;
   error?: string;
 }> {
-  const tokens = readGrokCliTokens(account);
+  const tokens = readGrokTokens(account);
   if (!tokens?.access_token) {
     return { success: false, error: "No access_token" };
   }
@@ -621,29 +672,22 @@ export async function grokCliFetchQuota(
     // Probe body mirrors the wire path the chat request actually uses, so the
     // center treats it identically for credit/rate-limit accounting. The
     // Responses endpoint requires `input` rather than `messages`.
-    const probeBody = USE_RESPONSES_API
-      ? {
-          model: PROBE_MODEL,
-          input: [
-            {
-              role: "user",
-              content: [{ type: "input_text", text: "1" }],
-            },
-          ],
-          stream: false,
-          store: false,
-          max_output_tokens: 1,
-          reasoning: { summary: "concise", effort: "low" },
-        }
-      : {
-          model: PROBE_MODEL,
-          messages: [{ role: "user", content: "1" }],
-          max_tokens: 1,
-          stream: false,
-        };
+    const probeBody = {
+      model: PROBE_MODEL,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "1" }],
+        },
+      ],
+      stream: false,
+      store: false,
+      max_output_tokens: 1,
+      reasoning: { summary: "concise", effort: "low" },
+    };
 
     const response = await fetchWithTimeout(
-      `${GROK_CLI_UPSTREAM_BASE}${USE_RESPONSES_API ? "/responses" : "/chat/completions"}`,
+      `${GROK_UPSTREAM_BASE}/responses`,
       {
         method: "POST",
         headers: buildGrokHeaders(
@@ -656,7 +700,7 @@ export async function grokCliFetchQuota(
     );
 
     const bodyText = await response.text().catch(() => "");
-    const center = quotaFromGrokCliCenterSignals({
+    const center = quotaFromGrokCenterSignals({
       headers: response.headers,
       body: bodyText,
       status: response.status,
@@ -666,7 +710,7 @@ export async function grokCliFetchQuota(
       return {
         success: true,
         exhausted: center.exhausted,
-        error: center.exhausted ? GROK_CLI_CREDIT_SOFT_ERROR : undefined,
+        error: center.exhausted ? GROK_CREDIT_SOFT_ERROR : undefined,
         quota: {
           limit: center.limit,
           remaining: center.remaining,
@@ -694,3 +738,17 @@ export async function grokCliFetchQuota(
 
   return { success: true, ...localEstimatedQuota(account) };
 }
+
+// deprecated aliases
+export const readGrokCliTokens = readGrokTokens;
+export const prepareGrokCliChatRequest = (request: ChatCompletionRequest) =>
+  prepareGrokChatRequest(request).request;
+export const failGrokCliChat = failGrokChat;
+export const failGrokCliImage = failGrokImage;
+export const grokCliUpstreamChat = grokUpstreamChat;
+export const grokCliUpstreamImage = grokUpstreamImage;
+export const grokCliDoRefresh = grokDoRefresh;
+export const grokCliImageRequest = grokImageRequest;
+export const grokCliChatCompletion = grokChatCompletion;
+export const grokCliChatCompletionStream = grokChatCompletionStream;
+export const grokCliFetchQuota = grokFetchQuota;

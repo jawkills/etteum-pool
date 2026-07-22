@@ -151,3 +151,6 @@ scripts/grok-farm/__pycache__/
 scripts/scratch/**/*.png
 scripts/scratch/**/*.json
 !scripts/scratch/README.md
+
+# Grok CPA export backups (secrets)
+backups/

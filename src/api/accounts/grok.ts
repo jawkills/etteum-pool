@@ -10,7 +10,7 @@ import { accounts } from "../../db/schema";
 import { encrypt } from "../../utils/crypto";
 import { broadcast } from "../../ws/index";
 import { pool, type ProviderName } from "../../proxy/pool";
-import { normalizeGrokCliCpa, GROK_CLI_TOKEN_LIMIT } from "../../proxy/providers/grok";
+import { normalizeGrokCpa, GROK_TOKEN_LIMIT } from "../../proxy/providers/grok";
 import { grokFarmQueue } from "../../auth/grok-farm/farm-queue";
 import { grokReauthQueue } from "../../auth/grok-farm/reauth-queue";
 import { isPlaceholderPassword } from "../../proxy/account-health";
@@ -77,7 +77,7 @@ export function registerGrokAccountRoutes(router: Hono): void {
 
     for (const item of items) {
       try {
-        const norm = normalizeGrokCliCpa(item);
+        const norm = normalizeGrokCpa(item);
         const tokensJson: Record<string, unknown> = {
           access_token: norm.access_token,
           refresh_token: norm.refresh_token,
@@ -107,8 +107,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
             tokens: tokensJson as unknown,
             status: "active",
             enabled: true,
-            quotaLimit: GROK_CLI_TOKEN_LIMIT,
-            quotaRemaining: existing.quotaRemaining ?? GROK_CLI_TOKEN_LIMIT,
+            quotaLimit: GROK_TOKEN_LIMIT,
+            quotaRemaining: existing.quotaRemaining ?? GROK_TOKEN_LIMIT,
             errorMessage: null,
             updatedAt: new Date(),
           };
@@ -135,8 +135,8 @@ export function registerGrokAccountRoutes(router: Hono): void {
               tokens: tokensJson as unknown,
               status: "active",
               enabled: true,
-              quotaLimit: GROK_CLI_TOKEN_LIMIT,
-              quotaRemaining: GROK_CLI_TOKEN_LIMIT,
+              quotaLimit: GROK_TOKEN_LIMIT,
+              quotaRemaining: GROK_TOKEN_LIMIT,
             })
             .returning();
           const created = inserted[0]!;
@@ -222,4 +222,154 @@ export function registerGrokAccountRoutes(router: Hono): void {
     if (!result.ok) return c.json({ error: result.error }, 409);
     return c.json({ data: grokReauthQueue.getStatus() });
   });
+
+  /**
+   * POST /api/accounts/grok/import-backup
+   * Restore accounts from export-grok-cpa JSONL / JSON array.
+   * Body: { text?: string; accounts?: any[] }
+   */
+  router.post("/grok/import-backup", async (c) => {
+    const body = await c.req.json<{ accounts?: any[]; text?: string }>();
+
+    let items: any[] = [];
+    if (Array.isArray(body.accounts) && body.accounts.length > 0) {
+      items = body.accounts;
+    } else if (typeof body.text === "string" && body.text.trim()) {
+      const text = body.text.trim();
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) items = parsed;
+        else if (parsed && typeof parsed === "object") items = [parsed];
+        else return c.json({ error: "text must be a JSON object or array" }, 400);
+      } catch {
+        items = [];
+        for (const line of text.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            items.push(JSON.parse(trimmed));
+          } catch (err) {
+            return c.json(
+              {
+                error: `Invalid NDJSON line: ${err instanceof Error ? err.message : String(err)}`,
+              },
+              400
+            );
+          }
+        }
+        if (items.length === 0) {
+          return c.json(
+            { error: "Could not parse text as JSON array, object, or NDJSON" },
+            400
+          );
+        }
+      }
+    } else {
+      return c.json({ error: "accounts array or text is required" }, 400);
+    }
+
+    // Flatten export records: { tokens, email, ... } → CPA shape
+    items = items.map((item) => {
+      if (item && typeof item === "object" && item.tokens && typeof item.tokens === "object") {
+        return {
+          ...item.tokens,
+          email: item.email || item.tokens.email,
+          password: item.password,
+          metadata: item.metadata,
+        };
+      }
+      return item;
+    });
+
+    const existingRows = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.provider, "grok"));
+
+    const results: Array<{
+      email?: string;
+      success: boolean;
+      id?: number;
+      updated?: boolean;
+      error?: string;
+    }> = [];
+    let imported = 0;
+    let failed = 0;
+
+    for (const item of items) {
+      try {
+        const norm = normalizeGrokCpa(item);
+        const tokensJson: Record<string, unknown> = {
+          access_token: norm.access_token,
+          refresh_token: norm.refresh_token,
+          token_type: norm.token_type || "Bearer",
+          client_id: norm.client_id,
+          email: norm.email,
+        };
+        if (norm.id_token) tokensJson.id_token = norm.id_token;
+        if (norm.team_id) tokensJson.team_id = norm.team_id;
+        if (norm.sub) tokensJson.sub = norm.sub;
+        if (norm.expires_at != null) tokensJson.expires_at = norm.expires_at;
+
+        const emailLower = norm.email.toLowerCase();
+        const existing = existingRows.find((r) => r.email.toLowerCase() === emailLower);
+        const passwordEnc = encrypt("grok-token-auth");
+
+        if (existing) {
+          await db
+            .update(accounts)
+            .set({
+              tokens: tokensJson as unknown,
+              status: "active",
+              enabled: true,
+              quotaLimit: GROK_TOKEN_LIMIT,
+              quotaRemaining: existing.quotaRemaining ?? GROK_TOKEN_LIMIT,
+              errorMessage: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(accounts.id, existing.id));
+          imported++;
+          results.push({ email: norm.email, success: true, id: existing.id, updated: true });
+        } else {
+          const inserted = await db
+            .insert(accounts)
+            .values({
+              provider: "grok",
+              email: norm.email,
+              password: passwordEnc,
+              tokens: tokensJson as unknown,
+              status: "active",
+              enabled: true,
+              quotaLimit: GROK_TOKEN_LIMIT,
+              quotaRemaining: GROK_TOKEN_LIMIT,
+            })
+            .returning();
+          const created = inserted[0]!;
+          existingRows.push(created);
+          imported++;
+          results.push({ email: norm.email, success: true, id: created.id, updated: false });
+        }
+      } catch (error) {
+        failed++;
+        const emailHint =
+          item && typeof item === "object"
+            ? String((item as any).email || (item as any).user_email || "")
+            : "";
+        results.push({
+          email: emailHint || undefined,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    pool.invalidate("grok" as ProviderName);
+    broadcast({
+      type: "accounts_bulk_created",
+      data: { count: imported, provider: "grok", source: "import-backup" },
+    });
+
+    return c.json({ imported, failed, results, source: "import-backup" });
+  });
+
 }

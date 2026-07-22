@@ -1,11 +1,12 @@
 /**
  * Grok runtime settings — settings table with short TTL cache.
- * Keys (optional; defaults match previous hardcodes):
- *   grok_refresh_lead_sec   int seconds (default 2700 = 45m)
- *   grok_max_account_retries int attempts per request (default 8)
  *
- * Hot path reads cache sync. First miss kicks a background DB load so
- * operator knobs survive process restart without waiting for Settings PUT.
+ * Keys:
+ *   grok_refresh_lead_sec        int seconds (default 2700 = 45m)
+ *   grok_max_account_retries     int attempts per request (default 8)
+ *   grok_auto_web_search         "true"|"false" (default true)
+ *   grok_auto_x_search           "true"|"false" (default true)
+ *   grok_auto_code_interpreter   "true"|"false" (default false)
  */
 
 import { db } from "../../../db/index";
@@ -14,29 +15,34 @@ import { like } from "drizzle-orm";
 
 const TTL_MS = 10_000;
 
-// Single default source for lead seconds (env override allowed).
-export const DEFAULT_GROK_CLI_REFRESH_LEAD_SEC =
-  Number(process.env.GROK_CLI_REFRESH_LEAD_SEC) || 45 * 60;
-export const DEFAULT_GROK_CLI_MAX_ACCOUNT_RETRIES = 8;
+export const DEFAULT_GROK_REFRESH_LEAD_SEC =
+  Number(process.env.GROK_REFRESH_LEAD_SEC || process.env.GROK_CLI_REFRESH_LEAD_SEC) || 45 * 60;
+export const DEFAULT_GROK_MAX_ACCOUNT_RETRIES = 8;
 
-export type GrokCliRuntimeSettings = {
+export type GrokRuntimeSettings = {
   refreshLeadSec: number;
   maxAccountRetries: number;
+  autoWebSearch: boolean;
+  autoXSearch: boolean;
+  autoCodeInterpreter: boolean;
 };
 
-export const DEFAULT_GROK_CLI_RUNTIME: GrokCliRuntimeSettings = {
-  refreshLeadSec: DEFAULT_GROK_CLI_REFRESH_LEAD_SEC,
-  maxAccountRetries: DEFAULT_GROK_CLI_MAX_ACCOUNT_RETRIES,
+export const DEFAULT_GROK_RUNTIME: GrokRuntimeSettings = {
+  refreshLeadSec: DEFAULT_GROK_REFRESH_LEAD_SEC,
+  maxAccountRetries: DEFAULT_GROK_MAX_ACCOUNT_RETRIES,
+  autoWebSearch: true,
+  autoXSearch: true,
+  autoCodeInterpreter: false,
 };
 
-let cache: { value: GrokCliRuntimeSettings; loadedAt: number } | null = null;
-let loadInFlight: Promise<GrokCliRuntimeSettings> | null = null;
+let cache: { value: GrokRuntimeSettings; loadedAt: number } | null = null;
+let loadInFlight: Promise<GrokRuntimeSettings> | null = null;
 
 function parseInt10(
   v: string | null | undefined,
   dflt: number,
   min: number,
-  max: number,
+  max: number
 ): number {
   if (v == null) return dflt;
   const n = parseInt(v, 10);
@@ -44,7 +50,15 @@ function parseInt10(
   return Math.min(max, Math.max(min, n));
 }
 
-async function loadFromDb(): Promise<GrokCliRuntimeSettings> {
+function parseBool(v: string | null | undefined, dflt: boolean): boolean {
+  if (v == null || v === "") return dflt;
+  const s = String(v).trim().toLowerCase();
+  if (s === "1" || s === "true" || s === "yes" || s === "on") return true;
+  if (s === "0" || s === "false" || s === "no" || s === "off") return false;
+  return dflt;
+}
+
+async function loadFromDb(): Promise<GrokRuntimeSettings> {
   const rows = await db.select().from(settings).where(like(settings.key, "grok_%"));
   const map = new Map<string, string | null>();
   for (const r of rows) map.set(r.key, r.value);
@@ -52,20 +66,26 @@ async function loadFromDb(): Promise<GrokCliRuntimeSettings> {
   return {
     refreshLeadSec: parseInt10(
       map.get("grok_refresh_lead_sec") ?? map.get("grok_cli_refresh_lead_sec"),
-      DEFAULT_GROK_CLI_RUNTIME.refreshLeadSec,
+      DEFAULT_GROK_RUNTIME.refreshLeadSec,
       60,
-      24 * 60 * 60,
+      24 * 60 * 60
     ),
     maxAccountRetries: parseInt10(
       map.get("grok_max_account_retries") ?? map.get("grok_cli_max_account_retries"),
-      DEFAULT_GROK_CLI_RUNTIME.maxAccountRetries,
+      DEFAULT_GROK_RUNTIME.maxAccountRetries,
       1,
-      50,
+      50
+    ),
+    autoWebSearch: parseBool(map.get("grok_auto_web_search"), DEFAULT_GROK_RUNTIME.autoWebSearch),
+    autoXSearch: parseBool(map.get("grok_auto_x_search"), DEFAULT_GROK_RUNTIME.autoXSearch),
+    autoCodeInterpreter: parseBool(
+      map.get("grok_auto_code_interpreter"),
+      DEFAULT_GROK_RUNTIME.autoCodeInterpreter
     ),
   };
 }
 
-export async function getGrokCliRuntimeSettings(): Promise<GrokCliRuntimeSettings> {
+export async function getGrokRuntimeSettings(): Promise<GrokRuntimeSettings> {
   const now = Date.now();
   if (cache && now - cache.loadedAt < TTL_MS) return cache.value;
   if (loadInFlight) return loadInFlight;
@@ -76,10 +96,9 @@ export async function getGrokCliRuntimeSettings(): Promise<GrokCliRuntimeSetting
       cache = { value, loadedAt: Date.now() };
       return value;
     } catch (err) {
-      console.error("[GrokCliSettings] Failed to load, using defaults:", err);
-      // Cache defaults briefly so we don't hammer DB on repeated failures.
-      cache = { value: DEFAULT_GROK_CLI_RUNTIME, loadedAt: Date.now() };
-      return DEFAULT_GROK_CLI_RUNTIME;
+      console.error("[GrokSettings] Failed to load, using defaults:", err);
+      cache = { value: DEFAULT_GROK_RUNTIME, loadedAt: Date.now() };
+      return DEFAULT_GROK_RUNTIME;
     } finally {
       loadInFlight = null;
     }
@@ -90,27 +109,42 @@ export async function getGrokCliRuntimeSettings(): Promise<GrokCliRuntimeSetting
 
 /**
  * Sync snapshot for hot path.
- * - Returns cache when present.
- * - On cold cache, returns defaults immediately and warms from DB in background
- *   so Settings survive restart without requiring a Settings PUT.
+ * Cold cache returns defaults immediately and warms from DB in background.
  */
-export function getCachedGrokCliRuntimeSettings(): GrokCliRuntimeSettings {
+export function getCachedGrokRuntimeSettings(): GrokRuntimeSettings {
   if (!cache) {
-    void getGrokCliRuntimeSettings();
-    return DEFAULT_GROK_CLI_RUNTIME;
+    void getGrokRuntimeSettings();
+    return DEFAULT_GROK_RUNTIME;
   }
-  // Refresh in background when TTL expired (still serve last value).
   if (Date.now() - cache.loadedAt >= TTL_MS) {
-    void getGrokCliRuntimeSettings();
+    void getGrokRuntimeSettings();
   }
   return cache.value;
 }
 
-export function invalidateGrokCliSettingsCache(): void {
+export function invalidateGrokSettingsCache(): void {
   cache = null;
   loadInFlight = null;
 }
 
-export function isGrokCliSettingKey(key: string): boolean {
+export function isGrokSettingKey(key: string): boolean {
   return key.startsWith("grok_") || key.startsWith("grok_cli_");
 }
+
+// --- deprecated aliases (call sites during transition) ---
+/** @deprecated use DEFAULT_GROK_REFRESH_LEAD_SEC */
+export const DEFAULT_GROK_CLI_REFRESH_LEAD_SEC = DEFAULT_GROK_REFRESH_LEAD_SEC;
+/** @deprecated */
+export const DEFAULT_GROK_CLI_MAX_ACCOUNT_RETRIES = DEFAULT_GROK_MAX_ACCOUNT_RETRIES;
+/** @deprecated */
+export type GrokCliRuntimeSettings = GrokRuntimeSettings;
+/** @deprecated */
+export const DEFAULT_GROK_CLI_RUNTIME = DEFAULT_GROK_RUNTIME;
+/** @deprecated */
+export const getGrokCliRuntimeSettings = getGrokRuntimeSettings;
+/** @deprecated */
+export const getCachedGrokCliRuntimeSettings = getCachedGrokRuntimeSettings;
+/** @deprecated */
+export const invalidateGrokCliSettingsCache = invalidateGrokSettingsCache;
+/** @deprecated */
+export const isGrokCliSettingKey = isGrokSettingKey;

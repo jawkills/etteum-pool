@@ -1,32 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import {
-  normalizeGrokCliCpa,
+  normalizeGrokCpa,
   grokCliOwnsModel,
-  buildGrokCliHeaders,
-  classifyGrokCliError,
-  isGrokCliDeadError,
+  buildGrokHeaders,
+  classifyGrokError,
+  isGrokDeadError,
   classifyGrokAuthFailure,
   formatGrokAuthFailure,
   parseGrokCliModelId,
   resolveGrokCliUpstreamModel,
-  extractGrokCliImageGenerationResults,
-  normalizeGrokCliImageRef,
-  collectGrokCliImageRefs,
-  normalizeGrokCliUsage,
-  stripGrokCliDataUrlPrefix,
-  parseGrokCliRateLimitHeaders,
-  parseGrokCliExhaustedBody,
-  normalizeGrokCliMessagesForOpenAI,
-  grokCliContentBlocksToText,
+  extractGrokImageGenerationResults,
+  normalizeGrokImageRef,
+  collectGrokImageRefs,
+  normalizeGrokUsage,
+  stripGrokDataUrlPrefix,
+  parseGrokRateLimitHeaders,
+  parseGrokExhaustedBody,
+  normalizeGrokMessagesForOpenAI,
+  grokContentBlocksToText,
   parseRetryAfterMs,
-  GROK_CLI_TOKEN_LIMIT,
+  GROK_TOKEN_LIMIT,
   GROK_CLI_CATALOG_IDS,
-  GROK_CLI_CREDIT_SOFT_ERROR,
+  GROK_CREDIT_SOFT_ERROR,
 } from "./index";
 
-describe("normalizeGrokCliCpa", () => {
+describe("normalizeGrokCpa", () => {
   test("accepts flat CPA", () => {
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "a@x.com",
       access_token: "at",
       refresh_token: "rt",
@@ -38,7 +38,7 @@ describe("normalizeGrokCliCpa", () => {
   });
 
   test("accepts nested tokens harvest format", () => {
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "b@x.com",
       tokens: { access_token: "at2", refresh_token: "rt2", id_token: "id2" },
     });
@@ -47,7 +47,7 @@ describe("normalizeGrokCliCpa", () => {
   });
 
   test("accepts camelCase keys", () => {
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "c@x.com",
       accessToken: "at3",
       refreshToken: "rt3",
@@ -57,13 +57,13 @@ describe("normalizeGrokCliCpa", () => {
   });
 
   test("throws when tokens missing", () => {
-    expect(() => normalizeGrokCliCpa({ email: "x@x.com" })).toThrow(/access_token/);
+    expect(() => normalizeGrokCpa({ email: "x@x.com" })).toThrow(/access_token/);
   });
 
   test("extracts team_id/sub from id_token JWT payload when present", () => {
     const payload = Buffer.from(JSON.stringify({ sub: "user-1", team_id: "team-9" })).toString("base64url");
     const idToken = `aaa.${payload}.bbb`;
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "d@x.com",
       access_token: "at",
       refresh_token: "rt",
@@ -75,7 +75,7 @@ describe("normalizeGrokCliCpa", () => {
 
   test("accepts farm fixture nested shape (etteum_push account_to_import_item)", () => {
     // Mirrors scripts/grok-farm/fixtures/cpa_nested_tokens.json
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "farm-nested@example.com",
       password: "secret-pw",
       tokens: {
@@ -92,7 +92,7 @@ describe("normalizeGrokCliCpa", () => {
   });
 
   test("accepts farm fixture flat shape", () => {
-    const out = normalizeGrokCliCpa({
+    const out = normalizeGrokCpa({
       email: "farm-flat@example.com",
       access_token: "at-flat",
       refresh_token: "rt-flat",
@@ -147,9 +147,9 @@ describe("parseGrokModelId", () => {
   });
 });
 
-describe("buildGrokCliHeaders", () => {
+describe("buildGrokHeaders", () => {
   test("includes required CLI auth headers and model override", () => {
-    const h = buildGrokCliHeaders(
+    const h = buildGrokHeaders(
       {
         access_token: "tok",
         email: "a@x.com",
@@ -175,14 +175,14 @@ describe("buildGrokCliHeaders", () => {
     expect(h["x-grok-user-id"]).toBe("u1");
   });
   test("model override for grok-4.5", () => {
-    const h = buildGrokCliHeaders({ access_token: "tok" }, "grok-4.5");
+    const h = buildGrokHeaders({ access_token: "tok" }, "grok-4.5");
     expect(h["x-grok-model-override"]).toBe("grok-4.5");
   });
 });
 
-describe("classifyGrokCliError", () => {
+describe("classifyGrokError", () => {
   test("403 spending limit => exhausted", () => {
-    expect(classifyGrokCliError(403, "credits are exhausted")).toBe("exhausted");
+    expect(classifyGrokError(403, "credits are exhausted")).toBe("exhausted");
   });
   test("402 personal-team-blocked:spending-limit => exhausted", () => {
     // Live center: free/personal team blocked — not 403, hyphenated code.
@@ -191,84 +191,84 @@ describe("classifyGrokCliError", () => {
       error:
         "You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage",
     });
-    expect(classifyGrokCliError(402, body)).toBe("exhausted");
+    expect(classifyGrokError(402, body)).toBe("exhausted");
   });
   test("402 alone (no body) => exhausted", () => {
-    expect(classifyGrokCliError(402, "")).toBe("exhausted");
+    expect(classifyGrokError(402, "")).toBe("exhausted");
   });
   test("429 free-usage-exhausted body => exhausted", () => {
     expect(
-      classifyGrokCliError(
+      classifyGrokError(
         429,
         "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
       )
     ).toBe("exhausted");
   });
   test("run out of credits text => exhausted", () => {
-    expect(classifyGrokCliError(400, "You have run out of credits")).toBe("exhausted");
+    expect(classifyGrokError(400, "You have run out of credits")).toBe("exhausted");
   });
   test("401 revoked => dead", () => {
-    expect(classifyGrokCliError(401, "invalid_grant revoked")).toBe("dead");
+    expect(classifyGrokError(401, "invalid_grant revoked")).toBe("dead");
   });
   test("401 generic => auth", () => {
-    expect(classifyGrokCliError(401, "unauthorized")).toBe("auth");
+    expect(classifyGrokError(401, "unauthorized")).toBe("auth");
   });
   test("500 still => null (unchanged)", () => {
-    expect(classifyGrokCliError(500, "boom")).toBe(null);
+    expect(classifyGrokError(500, "boom")).toBe(null);
   });
 
   // --- capacity / rate_limited (transient upstream overload) ---
   test("529 capacity message => rate_limited", () => {
     expect(
-      classifyGrokCliError(
+      classifyGrokError(
         529,
         "The model is currently at capacity due to high demand. Please try again in a few minutes, or use a higher service tier for priority processing: https://docs.x.ai/developers/advanced-api-usage/priority-processing"
       )
     ).toBe("rate_limited");
   });
   test("503 service unavailable => rate_limited", () => {
-    expect(classifyGrokCliError(503, "Service Unavailable")).toBe("rate_limited");
+    expect(classifyGrokError(503, "Service Unavailable")).toBe("rate_limited");
   });
   test("503 with capacity body => rate_limited", () => {
-    expect(classifyGrokCliError(503, "at capacity due to high demand")).toBe("rate_limited");
+    expect(classifyGrokError(503, "at capacity due to high demand")).toBe("rate_limited");
   });
   test("429 capacity body (no quota markers) => rate_limited, NOT exhausted", () => {
     expect(
-      classifyGrokCliError(429, "at capacity due to high demand")
+      classifyGrokError(429, "at capacity due to high demand")
     ).toBe("rate_limited");
   });
   test("429 rate limit exceeded text => rate_limited", () => {
-    expect(classifyGrokCliError(429, "rate limit exceeded")).toBe("rate_limited");
+    expect(classifyGrokError(429, "rate limit exceeded")).toBe("rate_limited");
   });
   test("429 too many requests text => rate_limited", () => {
-    expect(classifyGrokCliError(429, "too many requests")).toBe("rate_limited");
+    expect(classifyGrokError(429, "too many requests")).toBe("rate_limited");
   });
   test("overloaded text at any status => rate_limited", () => {
-    expect(classifyGrokCliError(200, "The model is overloaded")).toBe("rate_limited");
+    expect(classifyGrokError(200, "The model is overloaded")).toBe("rate_limited");
   });
   test("temporarily unavailable text => rate_limited", () => {
-    expect(classifyGrokCliError(503, "temporarily unavailable")).toBe("rate_limited");
+    expect(classifyGrokError(503, "temporarily unavailable")).toBe("rate_limited");
   });
   test("priority processing text => rate_limited", () => {
     expect(
-      classifyGrokCliError(429, "use a higher service tier for priority processing")
+      classifyGrokError(429, "use a higher service tier for priority processing")
     ).toBe("rate_limited");
   });
 
   // --- REGRESSION: 429 with quota body MUST stay exhausted (not rate_limited) ---
   test("429 with quota tokens body => exhausted (REGRESSION)", () => {
     expect(
-      classifyGrokCliError(
+      classifyGrokError(
         429,
         "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
       )
     ).toBe("exhausted");
   });
   test("429 with free-usage body => exhausted (REGRESSION)", () => {
-    expect(classifyGrokCliError(429, "free-usage-exhausted")).toBe("exhausted");
+    expect(classifyGrokError(429, "free-usage-exhausted")).toBe("exhausted");
   });
   test("429 with quota+exceed body => exhausted (REGRESSION)", () => {
-    expect(classifyGrokCliError(429, "quota has been exceeded")).toBe("exhausted");
+    expect(classifyGrokError(429, "quota has been exceeded")).toBe("exhausted");
   });
 });
 
@@ -310,7 +310,7 @@ describe("parseRetryAfterMs", () => {
   });
 });
 
-describe("parseGrokCliRateLimitHeaders", () => {
+describe("parseGrokRateLimitHeaders", () => {
   test("reads x-ratelimit token/request counters", () => {
     const h = new Headers({
       "x-ratelimit-limit-tokens": "1000000",
@@ -318,7 +318,7 @@ describe("parseGrokCliRateLimitHeaders", () => {
       "x-ratelimit-limit-requests": "100",
       "x-ratelimit-remaining-requests": "77",
     });
-    expect(parseGrokCliRateLimitHeaders(h)).toEqual({
+    expect(parseGrokRateLimitHeaders(h)).toEqual({
       limitTokens: 1_000_000,
       remainingTokens: 420_000,
       limitRequests: 100,
@@ -326,51 +326,51 @@ describe("parseGrokCliRateLimitHeaders", () => {
     });
   });
   test("tolerates plain object / missing", () => {
-    expect(parseGrokCliRateLimitHeaders({})).toEqual({});
+    expect(parseGrokRateLimitHeaders({})).toEqual({});
     expect(
-      parseGrokCliRateLimitHeaders({ "X-Ratelimit-Remaining-Tokens": "12" })
+      parseGrokRateLimitHeaders({ "X-Ratelimit-Remaining-Tokens": "12" })
     ).toEqual({ remainingTokens: 12 });
   });
 });
 
-describe("parseGrokCliExhaustedBody", () => {
+describe("parseGrokExhaustedBody", () => {
   test("parses tokens (actual/limit) from free-usage body", () => {
     expect(
-      parseGrokCliExhaustedBody(
+      parseGrokExhaustedBody(
         "subscription:free-usage-exhausted tokens (actual/limit): 1053503/1000000"
       )
     ).toEqual({ actual: 1_053_503, limit: 1_000_000, remaining: 0 });
   });
   test("null when no match", () => {
-    expect(parseGrokCliExhaustedBody("boom")).toBeNull();
+    expect(parseGrokExhaustedBody("boom")).toBeNull();
   });
 });
 
-describe("GROK_CLI_CREDIT_SOFT_ERROR", () => {
+describe("GROK_CREDIT_SOFT_ERROR", () => {
   test("stable soft string for clients", () => {
-    expect(GROK_CLI_CREDIT_SOFT_ERROR).toMatch(/credits exhausted/i);
+    expect(GROK_CREDIT_SOFT_ERROR).toMatch(/credits exhausted/i);
   });
 });
 
-describe("isGrokCliDeadError", () => {
+describe("isGrokDeadError", () => {
   test("matches invalid_grant / revoked / Grok dead prefix", () => {
-    expect(isGrokCliDeadError('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
-    expect(isGrokCliDeadError("Refresh token has been revoked")).toBe(true);
-    expect(isGrokCliDeadError("Grok dead: invalid_grant")).toBe(true);
+    expect(isGrokDeadError('invalid_grant: {"error":"invalid_grant"}')).toBe(true);
+    expect(isGrokDeadError("Refresh token has been revoked")).toBe(true);
+    expect(isGrokDeadError("Grok dead: invalid_grant")).toBe(true);
     // Missing credentials are unusable for traffic (dead) but not permanent IdP death.
-    expect(isGrokCliDeadError("No access_token for grok-cli account")).toBe(true);
+    expect(isGrokDeadError("No access_token for grok-cli account")).toBe(true);
   });
   test("does not match generic auth/network", () => {
-    expect(isGrokCliDeadError("Grok auth: unauthorized")).toBe(false);
-    expect(isGrokCliDeadError("timeout")).toBe(false);
-    expect(isGrokCliDeadError(null)).toBe(false);
+    expect(isGrokDeadError("Grok auth: unauthorized")).toBe(false);
+    expect(isGrokDeadError("timeout")).toBe(false);
+    expect(isGrokDeadError(null)).toBe(false);
   });
   test("missing credentials stay non-permanent (WarmUp must not latch)", async () => {
     const { isPermanentRevocation, isMissingCredentialMessage } = await import(
       "../../account-health"
     );
     const msg = "No access_token for grok-cli account";
-    expect(isGrokCliDeadError(msg)).toBe(true);
+    expect(isGrokDeadError(msg)).toBe(true);
     expect(isMissingCredentialMessage(msg)).toBe(true);
     expect(isPermanentRevocation(msg)).toBe(false);
     // The permanent latch string itself must only match real IdP death.
@@ -385,7 +385,7 @@ describe("formatGrokAuthFailure", () => {
     expect(out.kind).toBe("permanent");
     expect(out.permanent).toBe(true);
     expect(out.deadAccount).toBe(true);
-    expect(out.error.toLowerCase()).toContain("grok cli dead");
+    expect(out.error.toLowerCase()).toContain("grok dead");
     expect(classifyGrokAuthFailure(out.error)).toBe("permanent");
   });
 
@@ -395,7 +395,7 @@ describe("formatGrokAuthFailure", () => {
     expect(out.permanent).toBe(false);
     expect(out.deadAccount).toBe(true);
     expect(out.error).toBe("No access_token for grok-cli account");
-    expect(out.error.toLowerCase()).not.toContain("grok cli dead");
+    expect(out.error.toLowerCase()).not.toContain("grok dead");
   });
 
   test("generic auth is non-dead with auth prefix", () => {
@@ -408,7 +408,7 @@ describe("formatGrokAuthFailure", () => {
 
 describe("constants", () => {
   test("token limit is 2M", () => {
-    expect(GROK_CLI_TOKEN_LIMIT).toBe(2_000_000);
+    expect(GROK_TOKEN_LIMIT).toBe(2_000_000);
   });
 });
 
@@ -430,12 +430,12 @@ describe("quota probe model (regression)", () => {
   });
 });
 
-describe("normalizeGrokCliMessagesForOpenAI", () => {
+describe("normalizeGrokMessagesForOpenAI", () => {
   // Live Claude Code body that triggered:
   //   400 invalid-argument Empty content block
   // because content was Anthropic block array, not a plain string.
   test("flattens Claude Code text block arrays to strings", () => {
-    const out = normalizeGrokCliMessagesForOpenAI([
+    const out = normalizeGrokMessagesForOpenAI([
       {
         role: "user",
         content: [
@@ -458,7 +458,7 @@ describe("normalizeGrokCliMessagesForOpenAI", () => {
   });
 
   test("passthrough plain string content", () => {
-    const out = normalizeGrokCliMessagesForOpenAI([
+    const out = normalizeGrokMessagesForOpenAI([
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
     ] as any);
@@ -469,7 +469,7 @@ describe("normalizeGrokCliMessagesForOpenAI", () => {
   });
 
   test("lifts Anthropic tool_use + tool_result into OpenAI shape", () => {
-    const out = normalizeGrokCliMessagesForOpenAI([
+    const out = normalizeGrokMessagesForOpenAI([
       {
         role: "assistant",
         content: [
@@ -500,34 +500,34 @@ describe("normalizeGrokCliMessagesForOpenAI", () => {
     expect(out[2]).toEqual({ role: "user", content: "continue" });
   });
 
-  test("grokCliContentBlocksToText joins text parts", () => {
+  test("grokContentBlocksToText joins text parts", () => {
     expect(
-      grokCliContentBlocksToText([
+      grokContentBlocksToText([
         { type: "text", text: "a" },
         { type: "text", text: "b" },
       ])
     ).toBe("a\nb");
-    expect(grokCliContentBlocksToText("plain")).toBe("plain");
-    expect(grokCliContentBlocksToText(null)).toBe("");
+    expect(grokContentBlocksToText("plain")).toBe("plain");
+    expect(grokContentBlocksToText(null)).toBe("");
   });
 });
 
 describe("image helpers", () => {
-  test("stripGrokCliDataUrlPrefix removes data URL wrapper", () => {
-    expect(stripGrokCliDataUrlPrefix("data:image/png;base64,abc123")).toBe("abc123");
-    expect(stripGrokCliDataUrlPrefix("abc123")).toBe("abc123");
+  test("stripGrokDataUrlPrefix removes data URL wrapper", () => {
+    expect(stripGrokDataUrlPrefix("data:image/png;base64,abc123")).toBe("abc123");
+    expect(stripGrokDataUrlPrefix("abc123")).toBe("abc123");
   });
 
-  test("normalizeGrokCliImageRef handles bare b64, data URL, https", () => {
-    expect(normalizeGrokCliImageRef("aGVsbG8=")).toBe("data:image/png;base64,aGVsbG8=");
-    expect(normalizeGrokCliImageRef("data:image/jpeg;base64,/9j/xx")).toBe("data:image/jpeg;base64,/9j/xx");
-    expect(normalizeGrokCliImageRef("https://example.com/a.png")).toBe("https://example.com/a.png");
-    expect(normalizeGrokCliImageRef({ b64_json: "zzz" })).toBe("data:image/png;base64,zzz");
-    expect(normalizeGrokCliImageRef(null)).toBe(null);
+  test("normalizeGrokImageRef handles bare b64, data URL, https", () => {
+    expect(normalizeGrokImageRef("aGVsbG8=")).toBe("data:image/png;base64,aGVsbG8=");
+    expect(normalizeGrokImageRef("data:image/jpeg;base64,/9j/xx")).toBe("data:image/jpeg;base64,/9j/xx");
+    expect(normalizeGrokImageRef("https://example.com/a.png")).toBe("https://example.com/a.png");
+    expect(normalizeGrokImageRef({ b64_json: "zzz" })).toBe("data:image/png;base64,zzz");
+    expect(normalizeGrokImageRef(null)).toBe(null);
   });
 
-  test("collectGrokCliImageRefs gathers image/images and caps", () => {
-    const refs = collectGrokCliImageRefs(
+  test("collectGrokImageRefs gathers image/images and caps", () => {
+    const refs = collectGrokImageRefs(
       {
         image: "aaa",
         images: ["bbb", "ccc", "ddd", "eee"],
@@ -538,7 +538,7 @@ describe("image helpers", () => {
     expect(refs).toHaveLength(3);
   });
 
-  test("extractGrokCliImageGenerationResults reads image_generation_call", () => {
+  test("extractGrokImageGenerationResults reads image_generation_call", () => {
     const payload = {
       output: [
         { type: "reasoning", content: [] },
@@ -546,11 +546,11 @@ describe("image helpers", () => {
         { type: "image_generation_call", result: { b64_json: "qqq" } },
       ],
     };
-    expect(extractGrokCliImageGenerationResults(payload)).toEqual(["/9j/4AAQ", "qqq"]);
+    expect(extractGrokImageGenerationResults(payload)).toEqual(["/9j/4AAQ", "qqq"]);
   });
 
-  test("normalizeGrokCliUsage maps input/output aliases", () => {
-    expect(normalizeGrokCliUsage({ input_tokens: 10, output_tokens: 20 })).toEqual({
+  test("normalizeGrokUsage maps input/output aliases", () => {
+    expect(normalizeGrokUsage({ input_tokens: 10, output_tokens: 20 })).toEqual({
       prompt_tokens: 10,
       completion_tokens: 20,
       total_tokens: 30,

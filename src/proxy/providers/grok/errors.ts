@@ -5,9 +5,9 @@ import {
   isMissingCredentialMessage,
   isPermanentRevocation,
 } from "../../account-health";
-import { GROK_CLI_CREDIT_SOFT_ERROR, GROK_CLI_TOKEN_LIMIT } from "./constants";
+import { GROK_CREDIT_SOFT_ERROR, GROK_TOKEN_LIMIT } from "./constants";
 
-export type GrokCliErrorKind = "exhausted" | "dead" | "auth" | "rate_limited" | null;
+export type GrokErrorKind = "exhausted" | "dead" | "auth" | "rate_limited" | null;
 
 /**
  * Body patterns that indicate transient upstream overload (not account/quota).
@@ -40,7 +40,7 @@ function matchesCapacityBody(body: string): boolean {
  *   4. auth (401 generic)
  *   5. null (unknown — caller decides)
  */
-export function classifyGrokCliError(status: number, body: string): GrokCliErrorKind {
+export function classifyGrokError(status: number, body: string): GrokErrorKind {
   const low = (body || "").toLowerCase();
   if (low.includes("invalid_grant") || low.includes("revoked") || low.includes("unknown refresh")) {
     if (status === 401 || status === 403) return "dead";
@@ -156,7 +156,7 @@ function headerInt(headers: HeaderLike | null | undefined, name: string): number
   return Number.isFinite(n) ? Math.trunc(n) : undefined;
 }
 
-export type GrokCliRateLimitSnapshot = {
+export type GrokRateLimitSnapshot = {
   limitTokens?: number;
   remainingTokens?: number;
   limitRequests?: number;
@@ -164,10 +164,10 @@ export type GrokCliRateLimitSnapshot = {
 };
 
 /** Parse cli-chat-proxy x-ratelimit-* headers (center free-window truth). */
-export function parseGrokCliRateLimitHeaders(
+export function parseGrokRateLimitHeaders(
   headers: HeaderLike | null | undefined
-): GrokCliRateLimitSnapshot {
-  const out: GrokCliRateLimitSnapshot = {};
+): GrokRateLimitSnapshot {
+  const out: GrokRateLimitSnapshot = {};
   const limitTokens = headerInt(headers, "x-ratelimit-limit-tokens");
   const remainingTokens = headerInt(headers, "x-ratelimit-remaining-tokens");
   const limitRequests = headerInt(headers, "x-ratelimit-limit-requests");
@@ -183,7 +183,7 @@ export function parseGrokCliRateLimitHeaders(
  * Parse 429 free-usage body: `tokens (actual/limit): 1053503/1000000`.
  * remaining is max(0, limit - actual) — can be 0 when actual > limit.
  */
-export function parseGrokCliExhaustedBody(
+export function parseGrokExhaustedBody(
   body: string
 ): { actual: number; limit: number; remaining: number } | null {
   const m = /tokens\s*\(actual\/limit\)\s*:\s*(\d+)\s*\/\s*(\d+)/i.exec(body || "");
@@ -195,7 +195,7 @@ export function parseGrokCliExhaustedBody(
 }
 
 /** Build quota snapshot from center headers and/or exhausted body. */
-export function quotaFromGrokCliCenterSignals(opts: {
+export function quotaFromGrokCenterSignals(opts: {
   headers?: HeaderLike | null;
   body?: string;
   status?: number;
@@ -207,9 +207,9 @@ export function quotaFromGrokCliCenterSignals(opts: {
   source: string;
   exhausted: boolean;
 } | null {
-  const rl = parseGrokCliRateLimitHeaders(opts.headers);
-  const exhaustedBody = parseGrokCliExhaustedBody(opts.body || "");
-  const kind = classifyGrokCliError(opts.status ?? 0, opts.body || "");
+  const rl = parseGrokRateLimitHeaders(opts.headers);
+  const exhaustedBody = parseGrokExhaustedBody(opts.body || "");
+  const kind = classifyGrokError(opts.status ?? 0, opts.body || "");
 
   if (exhaustedBody) {
     return {
@@ -224,7 +224,7 @@ export function quotaFromGrokCliCenterSignals(opts: {
 
   if (rl.limitTokens != null || rl.remainingTokens != null) {
     const limit =
-      rl.limitTokens != null && rl.limitTokens > 0 ? rl.limitTokens : GROK_CLI_TOKEN_LIMIT;
+      rl.limitTokens != null && rl.limitTokens > 0 ? rl.limitTokens : GROK_TOKEN_LIMIT;
     const remaining = rl.remainingTokens != null ? Math.max(0, rl.remainingTokens) : limit;
     const used = Math.max(0, limit - remaining);
     return {
@@ -239,9 +239,9 @@ export function quotaFromGrokCliCenterSignals(opts: {
 
   if (kind === "exhausted") {
     return {
-      limit: GROK_CLI_TOKEN_LIMIT,
+      limit: GROK_TOKEN_LIMIT,
       remaining: 0,
-      used: GROK_CLI_TOKEN_LIMIT,
+      used: GROK_TOKEN_LIMIT,
       resetAt: null,
       source: "upstream-exhausted",
       exhausted: true,
@@ -255,12 +255,12 @@ export function quotaFromGrokCliCenterSignals(opts: {
  * True when this account must not be selected for traffic.
  * Includes permanent IdP death AND missing credentials.
  */
-export function isGrokCliDeadError(error?: string | null): boolean {
+export function isGrokDeadError(error?: string | null): boolean {
   return isDeadErrorMessage(error);
 }
 
 /** IdP revocation only (invalid_grant) — reauth/re-farm. */
-export function isGrokCliPermanentRevocation(error?: string | null): boolean {
+export function isGrokPermanentRevocation(error?: string | null): boolean {
   return isPermanentRevocation(error);
 }
 
@@ -273,12 +273,12 @@ export function classifyGrokAuthFailure(error?: string | null): GrokAuthClass {
   return "auth";
 }
 
-export function formatGrokCliDeadError(detail: string): string {
+export function formatGrokDeadError(detail: string): string {
   const cleaned = (detail || "").replace(/\s+/g, " ").trim().slice(0, 200);
-  if (!cleaned) return "Grok CLI dead: refresh token revoked";
-  if (cleaned.toLowerCase().startsWith("grok cli dead:")) return cleaned;
+  if (!cleaned) return "Grok dead: refresh token revoked";
+  if (cleaned.toLowerCase().startsWith("grok dead:")) return cleaned;
   if (isMissingCredentialMessage(cleaned)) return cleaned;
-  return `Grok CLI dead: ${cleaned}`;
+  return `Grok dead: ${cleaned}`;
 }
 
 export function formatGrokAuthFailure(error?: string | null): {
@@ -291,7 +291,7 @@ export function formatGrokAuthFailure(error?: string | null): {
   const kind = classifyGrokAuthFailure(raw);
   if (kind === "permanent") {
     return {
-      error: formatGrokCliDeadError(raw),
+      error: formatGrokDeadError(raw),
       deadAccount: true,
       permanent: true,
       kind,
@@ -309,4 +309,16 @@ export function formatGrokAuthFailure(error?: string | null): {
 }
 
 // Re-export soft error for convenience at this seam
-export { GROK_CLI_CREDIT_SOFT_ERROR };
+export { GROK_CREDIT_SOFT_ERROR };
+
+// deprecated aliases for transition
+export type GrokCliErrorKind = GrokErrorKind;
+export type GrokCliRateLimitSnapshot = GrokRateLimitSnapshot;
+export const classifyGrokCliError = classifyGrokError;
+export const parseGrokCliRateLimitHeaders = parseGrokRateLimitHeaders;
+export const parseGrokCliExhaustedBody = parseGrokExhaustedBody;
+export const quotaFromGrokCliCenterSignals = quotaFromGrokCenterSignals;
+export const isGrokCliDeadError = isGrokDeadError;
+export const isGrokCliPermanentRevocation = isGrokPermanentRevocation;
+export const formatGrokCliDeadError = formatGrokDeadError;
+export { GROK_CREDIT_SOFT_ERROR as GROK_CLI_CREDIT_SOFT_ERROR };

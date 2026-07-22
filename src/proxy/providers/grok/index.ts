@@ -1,6 +1,6 @@
 /**
  * Grok provider — session policy + catalog + public barrel.
- * Wire HTTP lives in grok-cli-wire.ts; pure helpers in sibling modules.
+ * Wire HTTP lives in wire.ts; pure helpers in sibling modules.
  */
 
 import {
@@ -17,22 +17,42 @@ import {
   type ProveMode,
   type SessionProveResult,
 } from "../../session-prove-map";
-import { getCachedGrokCliRuntimeSettings } from "./settings";
+import { getCachedGrokRuntimeSettings } from "./settings";
 
 // --- pure modules (re-exported for stable public API) ---
 export {
-  GROK_CLI_TOKEN_LIMIT,
-  GROK_CLI_UPSTREAM_BASE,
-  GROK_CLI_TOKEN_URL,
-  GROK_CLI_CLIENT_ID,
-  GROK_CLI_CLIENT_VERSION,
-  GROK_CLI_CLIENT_IDENTIFIER,
-  GROK_CLI_TOKEN_AUTH_VALUE,
-  GROK_CLI_REFRESH_LEAD_SEC,
-  GROK_CLI_IMAGE_TIMEOUT_MS,
-  GROK_CLI_CREDIT_SOFT_ERROR,
+  GROK_TOKEN_LIMIT,
+  GROK_UPSTREAM_BASE,
+  GROK_TOKEN_URL,
+  GROK_CLIENT_ID,
+  GROK_CLIENT_VERSION,
+  GROK_CLIENT_IDENTIFIER,
+  GROK_TOKEN_AUTH_VALUE,
+  GROK_REFRESH_LEAD_SEC,
+  GROK_IMAGE_TIMEOUT_MS,
+  GROK_CREDIT_SOFT_ERROR,
 } from "./constants";
-export { type GrokCliTokens, type GrokCliNormalized, normalizeGrokCliCpa } from "./cpa";
+// legacy constant aliases (map to new names)
+export {
+  GROK_TOKEN_LIMIT as GROK_CLI_TOKEN_LIMIT,
+  GROK_UPSTREAM_BASE as GROK_CLI_UPSTREAM_BASE,
+  GROK_TOKEN_URL as GROK_CLI_TOKEN_URL,
+  GROK_CLIENT_ID as GROK_CLI_CLIENT_ID,
+  GROK_CLIENT_VERSION as GROK_CLI_CLIENT_VERSION,
+  GROK_CLIENT_IDENTIFIER as GROK_CLI_CLIENT_IDENTIFIER,
+  GROK_TOKEN_AUTH_VALUE as GROK_CLI_TOKEN_AUTH_VALUE,
+  GROK_REFRESH_LEAD_SEC as GROK_CLI_REFRESH_LEAD_SEC,
+  GROK_IMAGE_TIMEOUT_MS as GROK_CLI_IMAGE_TIMEOUT_MS,
+  GROK_CREDIT_SOFT_ERROR as GROK_CLI_CREDIT_SOFT_ERROR,
+} from "./constants";
+export {
+  type GrokTokens,
+  type GrokNormalized,
+  normalizeGrokCpa,
+  normalizeGrokCliCpa,
+  type GrokCliTokens,
+  type GrokCliNormalized,
+} from "./auth";
 export {
   type GrokEffort,
   GROK_CATALOG_IDS,
@@ -46,30 +66,49 @@ export {
   grokCliOwnsModel,
 } from "./models";
 export {
-  type GrokCliErrorKind,
-  type GrokCliRateLimitSnapshot,
+  type GrokErrorKind,
+  type GrokRateLimitSnapshot,
   type GrokAuthClass,
+  classifyGrokError,
+  parseGrokRateLimitHeaders,
+  parseGrokExhaustedBody,
+  quotaFromGrokCenterSignals,
+  isGrokDeadError,
+  isGrokPermanentRevocation,
+  classifyGrokAuthFailure,
+  formatGrokAuthFailure,
+  formatGrokDeadError,
+  parseRetryAfterMs,
   classifyGrokCliError,
   parseGrokCliRateLimitHeaders,
   parseGrokCliExhaustedBody,
   quotaFromGrokCliCenterSignals,
   isGrokCliDeadError,
   isGrokCliPermanentRevocation,
-  classifyGrokAuthFailure,
-  formatGrokAuthFailure,
   formatGrokCliDeadError,
-  parseRetryAfterMs,
 } from "./errors";
 export {
+  grokContentBlocksToText,
+  normalizeGrokMessagesForOpenAI,
   grokCliContentBlocksToText,
   normalizeGrokCliMessagesForOpenAI,
 } from "./messages";
 export type {
+  GrokImageRequestOpts,
+  GrokImageResult,
+  GrokUsageNormalized,
   GrokCliImageRequestOpts,
   GrokCliImageResult,
   GrokCliUsageNormalized,
 } from "./image";
 export {
+  extractGrokImageGenerationResults,
+  normalizeGrokImageRef,
+  collectGrokImageRefs,
+  normalizeGrokUsage,
+  stripGrokDataUrlPrefix,
+  emptyGrokUsage,
+  addGrokUsage,
   extractGrokCliImageGenerationResults,
   normalizeGrokCliImageRef,
   collectGrokCliImageRefs,
@@ -86,47 +125,63 @@ export {
   translateResponsesSseToChatSse,
   jsonResponsesToChatCompletion,
 } from "./responses";
+export {
+  enrichTools,
+  mapClientTools,
+  stripInjectedBuiltins,
+  isUnknownToolError,
+} from "./tools";
+export {
+  getGrokRuntimeSettings,
+  getCachedGrokRuntimeSettings,
+  invalidateGrokSettingsCache,
+  isGrokSettingKey,
+  getGrokCliRuntimeSettings,
+  getCachedGrokCliRuntimeSettings,
+  invalidateGrokCliSettingsCache,
+  isGrokCliSettingKey,
+} from "./settings";
 
 import {
-  GROK_CLI_TOKEN_LIMIT,
-  GROK_CLI_CREDIT_SOFT_ERROR,
+  GROK_TOKEN_LIMIT,
+  GROK_CREDIT_SOFT_ERROR,
 } from "./constants";
-import { type GrokCliTokens } from "./cpa";
+import { type GrokTokens } from "./auth";
 import {
   GROK_CATALOG_IDS,
   grokOwnsModel,
 } from "./models";
 import {
-  classifyGrokCliError,
+  classifyGrokError,
   formatGrokAuthFailure,
-  formatGrokCliDeadError,
+  formatGrokDeadError,
 } from "./errors";
 import type {
-  GrokCliImageRequestOpts,
-  GrokCliImageResult,
+  GrokImageRequestOpts,
+  GrokImageResult,
 } from "./image";
 import {
-  grokCliChatCompletion,
-  grokCliChatCompletionStream,
-  grokCliDoRefresh,
-  grokCliFetchQuota,
-  grokCliImageRequest,
-  readGrokCliTokens,
+  grokChatCompletion,
+  grokChatCompletionStream,
+  grokDoRefresh,
+  grokFetchQuota,
+  grokImageRequest,
+  readGrokTokens,
   type UpstreamPipe,
 } from "./wire";
 
 /** Parse expires_at from unix sec/ms or ISO-8601 string. */
-export function parseGrokCliExpiresAt(raw: string | number | undefined | null): number | null {
+export function parseGrokExpiresAt(raw: string | number | undefined | null): number | null {
   return parseExpiresAtSec(raw);
 }
 
 /** True if access token should be refreshed before calling upstream. */
-export function grokCliNeedsProactiveRefresh(
-  tokens: GrokCliTokens,
-  leadSec: number = getCachedGrokCliRuntimeSettings().refreshLeadSec,
+export function grokNeedsProactiveRefresh(
+  tokens: GrokTokens,
+  leadSec: number = getCachedGrokRuntimeSettings().refreshLeadSec,
   nowSec = Math.floor(Date.now() / 1000)
 ): boolean {
-  const expSec = parseGrokCliExpiresAt(tokens.expires_at);
+  const expSec = parseGrokExpiresAt(tokens.expires_at);
   if (expSec == null) return false;
   return expSec - nowSec < leadSec;
 }
@@ -139,7 +194,7 @@ export class GrokProvider extends BaseProvider {
   override isFallback = false;
 
   override get maxAccountRetries(): number {
-    return getCachedGrokCliRuntimeSettings().maxAccountRetries;
+    return getCachedGrokRuntimeSettings().maxAccountRetries;
   }
 
   private refreshLocks = new Map<number, Promise<RefreshResult>>();
@@ -193,8 +248,8 @@ export class GrokProvider extends BaseProvider {
     return super.getModelInfo(model);
   }
 
-  private getTokens(account: Account): GrokCliTokens | null {
-    return readGrokCliTokens(account);
+  private getTokens(account: Account): GrokTokens | null {
+    return readGrokTokens(account);
   }
 
   private fetchBound = (
@@ -221,7 +276,7 @@ export class GrokProvider extends BaseProvider {
     if (isPermanentRevocation(account.errorMessage)) {
       return {
         ok: false,
-        error: account.errorMessage || formatGrokCliDeadError("refresh token revoked"),
+        error: account.errorMessage || formatGrokDeadError("refresh token revoked"),
         deadAccount: true,
         kind: "session_revoked",
       };
@@ -240,7 +295,7 @@ export class GrokProvider extends BaseProvider {
 
     const shouldRefresh =
       mode === "force" ||
-      grokCliNeedsProactiveRefresh(tokens) ||
+      grokNeedsProactiveRefresh(tokens) ||
       (mode === "if-needed" &&
         (account.status === "error" || account.status === "pending"));
 
@@ -304,9 +359,9 @@ export class GrokProvider extends BaseProvider {
     | { kind: "auth_failed"; error: string; deadAccount: boolean }
     | { kind: "refreshed"; account: Account; tokensJson: string }
   > {
-    const kind = classifyGrokCliError(status, bodyPeek);
+    const kind = classifyGrokError(status, bodyPeek);
     if (kind === "dead") {
-      return { kind: "dead", error: formatGrokCliDeadError(bodyPeek) };
+      return { kind: "dead", error: formatGrokDeadError(bodyPeek) };
     }
     const refreshed = await this.refreshToken(working);
     if (refreshed.success && refreshed.tokens) {
@@ -360,21 +415,21 @@ export class GrokProvider extends BaseProvider {
     return { ok: true, response, account: working, tokensJson };
   };
 
-  async imageRequest(account: Account, opts: GrokCliImageRequestOpts): Promise<GrokCliImageResult> {
-    return grokCliImageRequest(this.withGrokUpstream, account, opts, this.fetchBound);
+  async imageRequest(account: Account, opts: GrokImageRequestOpts): Promise<GrokImageResult> {
+    return grokImageRequest(this.withGrokUpstream, account, opts, this.fetchBound);
   }
 
   async imageGenerate(
     account: Account,
     opts: { prompt: string; n?: number; model?: string }
-  ): Promise<GrokCliImageResult> {
+  ): Promise<GrokImageResult> {
     return this.imageRequest(account, opts);
   }
 
   async imageEdit(
     account: Account,
     opts: { prompt: string; images: string[]; n?: number; model?: string }
-  ): Promise<GrokCliImageResult> {
+  ): Promise<GrokImageResult> {
     if (!(opts.images || []).filter(Boolean).length) {
       return { success: false, error: "image is required" };
     }
@@ -382,7 +437,7 @@ export class GrokProvider extends BaseProvider {
   }
 
   async chatCompletion(account: Account, request: ChatCompletionRequest): Promise<ProviderResult> {
-    return grokCliChatCompletion(
+    return grokChatCompletion(
       this.withGrokUpstream,
       account,
       request,
@@ -396,7 +451,7 @@ export class GrokProvider extends BaseProvider {
     account: Account,
     request: ChatCompletionRequest
   ): Promise<ProviderResult> {
-    return grokCliChatCompletionStream(
+    return grokChatCompletionStream(
       this.withGrokUpstream,
       account,
       request,
@@ -408,7 +463,7 @@ export class GrokProvider extends BaseProvider {
     const existing = this.refreshLocks.get(account.id);
     if (existing) return existing;
 
-    const p = grokCliDoRefresh(this.fetchBound, account).finally(() => {
+    const p = grokDoRefresh(this.fetchBound, account).finally(() => {
       this.refreshLocks.delete(account.id);
     });
     this.refreshLocks.set(account.id, p);
@@ -487,7 +542,7 @@ export class GrokProvider extends BaseProvider {
         kind: "exhausted",
         success: true,
         tokens: proved.tokens,
-        message: quota.error || GROK_CLI_CREDIT_SOFT_ERROR,
+        message: quota.error || GROK_CREDIT_SOFT_ERROR,
         quota: q
           ? {
               limit: q.limit,
@@ -497,9 +552,9 @@ export class GrokProvider extends BaseProvider {
               source: q.source || "grok.fetchQuota",
             }
           : {
-              limit: GROK_CLI_TOKEN_LIMIT,
+              limit: GROK_TOKEN_LIMIT,
               remaining: 0,
-              used: GROK_CLI_TOKEN_LIMIT,
+              used: GROK_TOKEN_LIMIT,
               resetAt: null,
               source: "upstream-exhausted",
             },
@@ -524,7 +579,7 @@ export class GrokProvider extends BaseProvider {
   }
 
   async fetchQuota(account: Account) {
-    return grokCliFetchQuota(this.fetchBound, account);
+    return grokFetchQuota(this.fetchBound, account);
   }
 }
 
@@ -533,3 +588,7 @@ export const grokProvider = new GrokProvider();
 /** @deprecated use grokProvider */
 export const grokCliProvider = grokProvider;
 export { GrokProvider as GrokCliProvider };
+/** @deprecated */
+export const parseGrokCliExpiresAt = parseGrokExpiresAt;
+/** @deprecated */
+export const grokCliNeedsProactiveRefresh = grokNeedsProactiveRefresh;

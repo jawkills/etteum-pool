@@ -2,9 +2,9 @@ import { applyAccountAttemptResult } from "./account-attempt";
 import { pool } from "./pool";
 import { providers } from "./providers/registry";
 import type { GrokProvider } from "./providers/grok";
-import type { GrokCliImageResult } from "./providers/grok/image";
+import type { GrokImageResult } from "./providers/grok/image";
 
-export type GrokCliImagePoolOpts = {
+export type GrokImagePoolOpts = {
   mode: "generate" | "edit";
   prompt: string;
   n: number;
@@ -13,8 +13,8 @@ export type GrokCliImagePoolOpts = {
   maxAttempts?: number;
 };
 
-export type GrokCliImagePoolOutcome = {
-  result: GrokCliImageResult;
+export type GrokImagePoolOutcome = {
+  result: GrokImageResult;
   accountId?: number;
   accountEmail?: string;
   durationMs: number;
@@ -26,8 +26,8 @@ export type GrokCliImagePoolOutcome = {
  * Account mark* side-effects go through applyAccountAttemptResult (same as chat router).
  */
 export async function runGrokCliImagePool(
-  opts: GrokCliImagePoolOpts
-): Promise<GrokCliImagePoolOutcome> {
+  opts: GrokImagePoolOpts
+): Promise<GrokImagePoolOutcome> {
   const provider = providers["grok"] as GrokProvider;
   if (!provider?.imageRequest) {
     return {
@@ -103,3 +103,6 @@ export async function runGrokCliImagePool(
     durationMs: Date.now() - started,
   };
 }
+
+/** Preferred alias */
+export const runGrokImagePool = runGrokCliImagePool;

@@ -3,7 +3,7 @@
 import type { ChatCompletionRequest } from "../base";
 
 /** Collapse Anthropic/OpenAI content blocks to a single string. */
-export function grokCliContentBlocksToText(content: unknown): string {
+export function grokContentBlocksToText(content: unknown): string {
   if (typeof content === "string") return content;
   if (content == null) return "";
   if (!Array.isArray(content)) return "";
@@ -11,7 +11,7 @@ export function grokCliContentBlocksToText(content: unknown): string {
     .map((b) => {
       if (!b || typeof b !== "object") return "";
       if (b.type === "text" && typeof b.text === "string") return b.text;
-      if (b.type === "tool_result") return grokCliContentBlocksToText(b.content);
+      if (b.type === "tool_result") return grokContentBlocksToText(b.content);
       if (typeof b.text === "string") return b.text;
       return "";
     })
@@ -25,7 +25,7 @@ export function grokCliContentBlocksToText(content: unknown): string {
  * `content: [{type:"text", text:"…"}]` instead of a plain string.
  * Also lifts Anthropic tool_use / tool_result blocks into OpenAI tool_calls / role:tool.
  */
-export function normalizeGrokCliMessagesForOpenAI(
+export function normalizeGrokMessagesForOpenAI(
   messages: ChatCompletionRequest["messages"]
 ): any[] {
   const out: any[] = [];
@@ -35,7 +35,7 @@ export function normalizeGrokCliMessagesForOpenAI(
       out.push({
         role: "tool",
         tool_call_id: (msg as any).tool_call_id,
-        content: grokCliContentBlocksToText(msg.content),
+        content: grokContentBlocksToText(msg.content),
       });
       continue;
     }
@@ -43,7 +43,7 @@ export function normalizeGrokCliMessagesForOpenAI(
     if (msg.role === "system") {
       out.push({
         role: "system",
-        content: grokCliContentBlocksToText(msg.content),
+        content: grokContentBlocksToText(msg.content),
       });
       continue;
     }
@@ -57,7 +57,7 @@ export function normalizeGrokCliMessagesForOpenAI(
         typeof msg.content === "string"
           ? msg.content
           : Array.isArray(msg.content)
-            ? grokCliContentBlocksToText(msg.content)
+            ? grokContentBlocksToText(msg.content)
             : null;
       out.push({
         role: "assistant",
@@ -103,7 +103,7 @@ export function normalizeGrokCliMessagesForOpenAI(
       } else if (b.type === "tool_result") {
         let content = "";
         if (typeof b.content === "string") content = b.content;
-        else if (Array.isArray(b.content)) content = grokCliContentBlocksToText(b.content);
+        else if (Array.isArray(b.content)) content = grokContentBlocksToText(b.content);
         if (b.is_error) content = `[ERROR] ${content}`;
         toolResults.push({ id: b.tool_use_id, content });
       } else if (typeof b.text === "string") {
@@ -152,3 +152,7 @@ export function normalizeGrokCliMessagesForOpenAI(
 
   return out;
 }
+
+// deprecated aliases
+export const grokCliContentBlocksToText = grokContentBlocksToText;
+export const normalizeGrokCliMessagesForOpenAI = normalizeGrokMessagesForOpenAI;

@@ -1,14 +1,15 @@
 /**
  * Request headers for cli-chat-proxy — aligned with xai-org/grok-build SamplingClient.
+ * Session ids are stable when a seed (prompt_cache_key / hash) is provided.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
-  GROK_CLI_CLIENT_IDENTIFIER,
-  GROK_CLI_CLIENT_VERSION,
-  GROK_CLI_TOKEN_AUTH_VALUE,
+  GROK_CLIENT_IDENTIFIER,
+  GROK_CLIENT_VERSION,
+  GROK_TOKEN_AUTH_VALUE,
 } from "./constants";
-import type { GrokCliTokens } from "./cpa";
+import type { GrokTokens } from "./auth";
 import { resolveGrokUpstreamModel } from "./models";
 
 export type GrokHeaderContext = {
@@ -18,6 +19,8 @@ export type GrokHeaderContext = {
   agentId?: string;
   turnIdx?: number;
   clientMode?: "interactive" | "headless";
+  /** Deterministic seed for session/conv (e.g. prompt_cache_key). */
+  sessionSeed?: string;
 };
 
 function platformUaSuffix(): string {
@@ -32,29 +35,45 @@ function platformUaSuffix(): string {
   return `(${os}; ${arch})`;
 }
 
-export function buildGrokUserAgent(clientVersion = GROK_CLI_CLIENT_VERSION): string {
-  const ver = clientVersion || GROK_CLI_CLIENT_VERSION;
-  const id = GROK_CLI_CLIENT_IDENTIFIER || "grok-shell";
+export function buildGrokUserAgent(clientVersion = GROK_CLIENT_VERSION): string {
+  const ver = clientVersion || GROK_CLIENT_VERSION;
+  const id = GROK_CLIENT_IDENTIFIER || "grok-shell";
   return `${id}/${ver} ${platformUaSuffix()}`;
 }
 
-export const buildGrokCliUserAgent = buildGrokUserAgent;
+/** Derive a stable UUID-like id from a seed string. */
+export function stableSessionIdFromSeed(seed: string): string {
+  const hex = createHash("sha256").update(seed).digest("hex");
+  // Format as UUID v4-ish for header friendliness
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    "4" + hex.slice(13, 16),
+    ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0") +
+      hex.slice(18, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
 
 export function buildGrokHeaders(
   tokens: Pick<
-    GrokCliTokens,
+    GrokTokens,
     "access_token" | "email" | "team_id" | "sub" | "user_id" | "principal_id"
   > & { email?: string },
   model: string,
-  clientVersion = GROK_CLI_CLIENT_VERSION,
+  clientVersion = GROK_CLIENT_VERSION,
   ctx: GrokHeaderContext = {}
 ): Record<string, string> {
-  const ver = clientVersion || GROK_CLI_CLIENT_VERSION;
-  const identifier = GROK_CLI_CLIENT_IDENTIFIER || "grok-shell";
+  const ver = clientVersion || GROK_CLIENT_VERSION;
+  const identifier = GROK_CLIENT_IDENTIFIER || "grok-shell";
   const upstreamModel = resolveGrokUpstreamModel(model);
 
   const reqId = ctx.reqId || randomUUID();
-  const sessionId = ctx.sessionId || ctx.convId || randomUUID();
+  const seeded =
+    ctx.sessionId ||
+    ctx.convId ||
+    (ctx.sessionSeed ? stableSessionIdFromSeed(ctx.sessionSeed) : randomUUID());
+  const sessionId = seeded;
   const convId = ctx.convId || sessionId;
   const agentId = ctx.agentId || sessionId;
 
@@ -63,7 +82,7 @@ export function buildGrokHeaders(
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent": buildGrokUserAgent(ver),
-    "x-xai-token-auth": GROK_CLI_TOKEN_AUTH_VALUE,
+    "x-xai-token-auth": GROK_TOKEN_AUTH_VALUE,
     "x-grok-client-identifier": identifier,
     "x-grok-client-version": ver,
     "x-grok-client-mode": ctx.clientMode || "interactive",
@@ -89,4 +108,7 @@ export function buildGrokHeaders(
   return h;
 }
 
+/** @deprecated */
+export const buildGrokCliUserAgent = buildGrokUserAgent;
+/** @deprecated */
 export const buildGrokCliHeaders = buildGrokHeaders;

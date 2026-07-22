@@ -92,10 +92,8 @@ export function grokOwnsModel(model: string): boolean {
   return false;
 }
 
-// Deprecated aliases (internal transition)
-export type GrokCliEffort = GrokEffort;
+// deprecated aliases
 export const GROK_CLI_CATALOG_IDS = GROK_CATALOG_IDS;
-export const GROK_CLI_DEFAULT_UPSTREAM_MODEL = GROK_UPSTREAM_MODEL;
 export function parseGrokCliModelId(model: string) {
   const p = parseGrokModelId(model);
   return {
