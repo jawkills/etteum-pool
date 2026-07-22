@@ -1,5 +1,6 @@
 import StatsCards from "@/components/dashboard/StatsCards";
 import TokenUsage from "@/components/dashboard/TokenUsage";
+import { PageHeader } from "@/components/ui/page-header";
 import { useEffect, useRef, useState } from "react";
 import { fetchDashboardStats, fetchModelUsage } from "@/lib/api";
 import { modelColor } from "@/lib/utils";
@@ -12,19 +13,25 @@ export default function Dashboard() {
   async function load() {
     await Promise.all([
       fetchDashboardStats(undefined, "all").then(setStats).catch(() => setStats(null)),
-      fetchModelUsage(undefined, "all").then((res: { data: any[] }) => setModelStats(res.data || [])).catch(() => setModelStats([])),
+      fetchModelUsage(undefined, "all")
+        .then((res: { data: any[] }) => setModelStats(res.data || []))
+        .catch(() => setModelStats([])),
     ]);
   }
 
   const reloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleReload = () => {
     if (reloadRef.current) clearTimeout(reloadRef.current);
-    reloadRef.current = setTimeout(() => { load(); }, 500);
+    reloadRef.current = setTimeout(() => {
+      load();
+    }, 500);
   };
 
   useEffect(() => {
     load();
-    return () => { if (reloadRef.current) clearTimeout(reloadRef.current); };
+    return () => {
+      if (reloadRef.current) clearTimeout(reloadRef.current);
+    };
   }, []);
 
   useWsEvent(
@@ -39,7 +46,7 @@ export default function Dashboard() {
       "accounts_bulk_created",
       "provider_toggled",
     ],
-    scheduleReload,
+    scheduleReload
   );
 
   const totalRequests = Number(stats?.requests?.total || 0);
@@ -61,26 +68,32 @@ export default function Dashboard() {
     credits: Number(stats?.tokens?.credits || 0),
   };
 
-  const modelUsage = modelStats.filter((m) => Number(m.totalTokens || 0) > 0 || Number(m.credits || 0) > 0).slice(0, 8).map((m, idx) => ({
-    provider: m.provider || "unknown",
-    model: m.model || "unknown",
-    tokens: Number(m.totalTokens || 0),
-    promptTokens: Number(m.promptTokens || 0),
-    completionTokens: Number(m.completionTokens || 0),
-    credits: Number(m.credits || 0),
-    requests: Number(m.totalRequests || 0),
-    creditSource: m.creditSource || "estimated",
-    color: modelColor(`${m.provider || "unknown"}/${m.model || "unknown"}`, idx),
-  }));
+  const modelUsage = modelStats
+    .filter((m) => Number(m.totalTokens || 0) > 0 || Number(m.credits || 0) > 0)
+    .slice(0, 8)
+    .map((m, idx) => ({
+      provider: m.provider || "unknown",
+      model: m.model || "unknown",
+      tokens: Number(m.totalTokens || 0),
+      promptTokens: Number(m.promptTokens || 0),
+      completionTokens: Number(m.completionTokens || 0),
+      credits: Number(m.credits || 0),
+      requests: Number(m.totalRequests || 0),
+      creditSource: m.creditSource || "estimated",
+      color: modelColor(`${m.provider || "unknown"}/${m.model || "unknown"}`, idx),
+    }));
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">Dashboard</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Overview of your proxy pool status
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Overview"
+        title={
+          <>
+            Dashboard <span className="text-gradient-gold">live</span>
+          </>
+        }
+        description="Pool health, requests, and token throughput"
+      />
 
       <StatsCards data={dashboardStats} />
 

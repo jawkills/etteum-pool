@@ -25,10 +25,9 @@ export default function Layout({ onLogout }: LayoutProps) {
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
-      {/* Mobile backdrop */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -43,17 +42,16 @@ export default function Layout({ onLogout }: LayoutProps) {
 
       <main
         className={
-          "h-screen overflow-y-auto p-4 pt-18 md:pt-6 md:p-6 transition-all duration-200 " +
+          "h-screen overflow-y-auto bg-[var(--background)] p-4 pt-18 transition-all duration-200 md:p-6 md:pt-6 " +
           (collapsed ? "md:ml-[64px]" : "md:ml-[240px]")
         }
       >
-        {/* Mobile menu button */}
         <button
           onClick={() => setSidebarOpen(true)}
-          className="fixed top-4 left-4 z-30 md:hidden p-2 rounded-md bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--secondary)] transition-colors shadow-md"
+          className="fixed top-4 left-4 z-30 rounded-full border border-[var(--border)] bg-[var(--card)] p-2 text-[var(--foreground)] shadow-[var(--shadow-card)] transition-colors hover:bg-[var(--secondary)] md:hidden"
           aria-label="Open menu"
         >
-          <Menu className="w-5 h-5" />
+          <Menu className="h-5 w-5" />
         </button>
 
         <Outlet />

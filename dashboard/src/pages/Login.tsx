@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Eye, EyeOff, Lock } from "lucide-react";
-import { validateApiKey, API_BASE } from "@/lib/api";
+import { validateApiKey } from "@/lib/api";
 
 interface LoginProps {
   onLogin: () => void;
@@ -40,14 +40,21 @@ export default function Login({ onLogin }: LoginProps) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--background)] p-4">
-      <Card className="w-full max-w-sm border-[var(--border)]">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--background)] p-4">
+      <div className="pointer-events-none absolute inset-0 bg-grid-pattern opacity-60" />
+      <div className="pointer-events-none absolute -top-24 right-10 h-64 w-64 rounded-full bg-[var(--primary)] opacity-10 blur-[120px]" />
+      <div className="pointer-events-none absolute -bottom-20 left-8 h-56 w-56 rounded-full bg-[var(--gold)] opacity-[0.07] blur-[100px]" />
+
+      <Card className="relative w-full max-w-sm border-[var(--border)] shadow-[var(--glow)]">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--primary)]/10">
-            <Lock className="h-6 w-6 text-[var(--primary)]" />
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-primary shadow-[var(--glow)]">
+            <Lock className="h-5 w-5 text-white" />
           </div>
-          <CardTitle className="text-xl">Etteum</CardTitle>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
+          <CardTitle className="font-heading text-xl">Etteum</CardTitle>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+            Proxy ledger access
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted-foreground)]">
             Enter your API key to access the dashboard
           </p>
         </CardHeader>
@@ -57,7 +64,10 @@ export default function Login({ onLogin }: LoginProps) {
               <Input
                 type={showKey ? "text" : "password"}
                 value={key}
-                onChange={(e) => { setKey(e.target.value); setError(null); }}
+                onChange={(e) => {
+                  setKey(e.target.value);
+                  setError(null);
+                }}
                 placeholder="sk-pool-..."
                 className="pr-10 font-mono text-sm"
                 autoFocus
@@ -65,14 +75,14 @@ export default function Login({ onLogin }: LoginProps) {
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                className="absolute top-1/2 right-3 -translate-y-1/2 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               >
-                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
 
             {error && (
-              <div className="rounded-md bg-[var(--error)]/10 p-3 text-sm text-[var(--error)]">
+              <div className="rounded-xl border border-[var(--error)]/30 bg-[var(--error)]/10 p-3 text-sm text-[var(--error)]">
                 {error}
               </div>
             )}
